@@ -3,7 +3,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="10">
+<meta http-equiv="refresh" content="60">
 <title>pricemon · BTC overview</title>
 <style>
   :root { color-scheme: dark; }
@@ -56,13 +56,25 @@
   .footer { color: #5d6168; font-size: 12px; margin-top: 24px; }
   a { color: #6aa6ff; text-decoration: none; }
   a:hover { text-decoration: underline; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+            gap: 16px; margin-bottom: 28px; }
+  .chart-card { background: #1a1c20; border: 1px solid #25282d; border-radius: 8px;
+                padding: 14px 16px 10px; }
+  .chart-card .chart-head { display: flex; align-items: baseline; justify-content: space-between;
+                            margin-bottom: 6px; }
+  .chart-card .chart-title { font-size: 13px; color: #8b8f95; text-transform: uppercase;
+                             letter-spacing: 0.06em; }
+  .chart-card .chart-status { font-size: 11px; color: #5d6168; font-variant-numeric: tabular-nums; }
+  .chart-card .chart-status.bad { color: #c44e4e; }
+  .chart-card .chart-box { height: 280px; }
 </style>
 </head>
 <body>
   <h1>pricemon · BTC overview</h1>
   <div class="sub">
     {{ active_exchanges }} active exchanges · {{ total_aggregates }} minute aggregates ·
-    refreshed {{ now|date:"Y-m-d H:i:s" }} UTC · auto-refresh 10 s ·
+    refreshed {{ now|date:"Y-m-d H:i:s" }} UTC · auto-refresh 60 s ·
+    <a href="/history/">history</a> ·
     <a href="/api/current/">live JSON</a> ·
     <a href="/api/prices/?window={{ short_window }}">window JSON</a>
   </div>
@@ -161,6 +173,18 @@
     {% endif %}
   </div>
 
+  <div class="charts" id="charts">
+    {% for fiat in primary_quotes %}
+      <div class="chart-card">
+        <div class="chart-head">
+          <div class="chart-title">BTC / {{ fiat }} · 1-minute candles</div>
+          <div class="chart-status" data-fiat-status="{{ fiat }}">loading…</div>
+        </div>
+        <div class="chart-box" data-fiat-chart="{{ fiat }}"></div>
+      </div>
+    {% endfor %}
+  </div>
+
   <table>
     <thead>
       <tr>
@@ -216,8 +240,98 @@
 
   <div class="footer">
     Endpoints: <a href="/api/prices/">/api/prices/</a> ·
+    <a href="/api/current/">/api/current/</a> ·
+    <a href="/api/candles/">/api/candles/</a> ·
     <a href="/api/health/">/api/health/</a> ·
     <a href="/admin/">/admin/</a>
   </div>
+
+  <script src="{% static 'api/vendor/lightweight-charts.standalone.production.js' %}"></script>
+  <script>
+  (function () {
+    const WINDOW_MIN = 120;
+    const REFRESH_MS = 15000;
+    const fiats = Array.from(
+      document.querySelectorAll('[data-fiat-chart]')
+    ).map(el => el.dataset.fiatChart);
+    if (!fiats.length || typeof LightweightCharts === 'undefined') return;
+
+    const baseChartOpts = {
+      layout: {
+        background: { type: 'solid', color: '#1a1c20' },
+        textColor: '#8b8f95',
+        fontSize: 11,
+        attributionLogo: false,
+      },
+      grid: {
+        vertLines: { color: '#23262b' },
+        horzLines: { color: '#23262b' },
+      },
+      rightPriceScale: { borderColor: '#25282d' },
+      timeScale: {
+        borderColor: '#25282d',
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      crosshair: { mode: 1 },
+      autoSize: true,
+    };
+
+    const seriesOpts = {
+      upColor: '#3aa75e',
+      downColor: '#c44e4e',
+      borderUpColor: '#3aa75e',
+      borderDownColor: '#c44e4e',
+      wickUpColor: '#3aa75e',
+      wickDownColor: '#c44e4e',
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+    };
+
+    const charts = {};
+    for (const fiat of fiats) {
+      const container = document.querySelector(`[data-fiat-chart="${fiat}"]`);
+      if (!container) continue;
+      const chart = LightweightCharts.createChart(container, baseChartOpts);
+      const series = chart.addSeries(LightweightCharts.CandlestickSeries, seriesOpts);
+      charts[fiat] = { chart, series, container };
+    }
+
+    function setStatus(fiat, text, isBad) {
+      const el = document.querySelector(`[data-fiat-status="${fiat}"]`);
+      if (!el) return;
+      el.textContent = text;
+      el.classList.toggle('bad', !!isBad);
+    }
+
+    async function refresh() {
+      const params = new URLSearchParams();
+      params.set('window', String(WINDOW_MIN));
+      for (const f of fiats) params.append('fiat', f);
+      try {
+        const res = await fetch(`/api/candles/?${params}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        for (const fiat of fiats) {
+          const entry = charts[fiat];
+          const bars = (data.series && data.series[fiat]) || [];
+          if (!entry) continue;
+          entry.series.setData(bars);
+          if (bars.length === 0) {
+            setStatus(fiat, 'no data in window', true);
+          } else {
+            const last = bars[bars.length - 1];
+            const ts = new Date(last.time * 1000).toISOString().slice(11, 16);
+            setStatus(fiat, `${bars.length} bars · last ${ts} UTC · ${last.close.toFixed(2)} ${fiat}`, false);
+          }
+        }
+      } catch (err) {
+        for (const fiat of fiats) setStatus(fiat, `error: ${err.message}`, true);
+      }
+    }
+
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+  })();
+  </script>
 </body>
 </html>

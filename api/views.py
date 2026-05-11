@@ -1,9 +1,9 @@
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from django.conf import settings
-from django.db.models import Max, Sum
+from django.db.models import Max, Min, Sum
 from django.shortcuts import render
 from django.utils import timezone
 from django.views import View
@@ -629,6 +629,299 @@ class CurrentPriceView(APIView):
         })
 
 
+def _merged_minute_candles(
+    start_dt,
+    end_dt,
+    base: str,
+    fiat: str,
+    peg_map: dict[str, str],
+) -> list[dict]:
+    """Per-minute OHLC for (base, fiat) merged across exchanges and stables.
+
+    For each minute m, contributors are the per-(exchange, quote) MinuteAggregates
+    where quote is `fiat` (rate 1) or a stablecoin pegged to `fiat`. Stable rows
+    are converted with that *same minute's* VWAP stable→fiat rate, falling back
+    to the nearest earlier minute's rate within the window, so a minute with no
+    stable trades still resolves a rate.
+
+    The merged candle is:
+      high  = max(price_max contributors × rate)
+      low   = min(price_min contributors × rate)
+      vwap  = sum(volume_quote × rate) / sum(volume_base)
+      close = vwap
+      open  = previous minute's vwap (first minute opens at its own vwap)
+    """
+    stables_for_fiat = [s for s, f in peg_map.items() if f == fiat]
+    merge_quotes = {fiat, *stables_for_fiat}
+
+    # Stable→fiat rate per minute. Aggregate across exchanges so each minute
+    # has one canonical rate per stablecoin.
+    rates_by_minute: dict[tuple[str, datetime], Decimal] = {}
+    if stables_for_fiat:
+        rate_rows = (
+            MinuteAggregate.objects
+            .filter(
+                pair__base__code__in=stables_for_fiat,
+                pair__quote__code=fiat,
+                pair__exchange__is_active=True,
+                minute_start__gte=start_dt,
+                minute_start__lt=end_dt,
+            )
+            .values("pair__base__code", "minute_start")
+            .annotate(volume_base=Sum("volume_base"), volume_quote=Sum("volume_quote"))
+        )
+        for r in rate_rows:
+            vb = r["volume_base"] or Decimal(0)
+            if not vb:
+                continue
+            rates_by_minute[(r["pair__base__code"], r["minute_start"])] = (
+                (r["volume_quote"] or Decimal(0)) / vb
+            )
+
+    def _rate_for(stable: str, minute: datetime) -> Decimal | None:
+        rate = rates_by_minute.get((stable, minute))
+        if rate is not None:
+            return rate
+        # Walk back through preceding minutes in the window for a fallback.
+        best: tuple[datetime, Decimal] | None = None
+        for (s, m), v in rates_by_minute.items():
+            if s != stable or m > minute:
+                continue
+            if best is None or m > best[0]:
+                best = (m, v)
+        return best[1] if best else None
+
+    # Contributors: per-(quote, minute) aggregated across exchanges.
+    contrib_rows = (
+        MinuteAggregate.objects
+        .filter(
+            pair__base__code=base,
+            pair__quote__code__in=merge_quotes,
+            pair__exchange__is_active=True,
+            minute_start__gte=start_dt,
+            minute_start__lt=end_dt,
+        )
+        .values("pair__quote__code", "minute_start")
+        .annotate(
+            volume_base=Sum("volume_base"),
+            volume_quote=Sum("volume_quote"),
+            price_min=Min("price_min"),
+            price_max=Max("price_max"),
+        )
+    )
+
+    merged: dict[datetime, dict] = {}
+    for r in contrib_rows:
+        minute = r["minute_start"]
+        quote = r["pair__quote__code"]
+        if quote == fiat:
+            rate = Decimal(1)
+        else:
+            rate = _rate_for(quote, minute)
+            if rate is None:
+                continue
+        vb = r["volume_base"] or Decimal(0)
+        if not vb:
+            continue
+        vq = (r["volume_quote"] or Decimal(0)) * rate
+        hi = (r["price_max"] or Decimal(0)) * rate
+        lo = (r["price_min"] or Decimal(0)) * rate
+        slot = merged.setdefault(minute, {
+            "volume_base": Decimal(0),
+            "volume_quote_fiat": Decimal(0),
+            "high": None,
+            "low": None,
+        })
+        slot["volume_base"] += vb
+        slot["volume_quote_fiat"] += vq
+        if slot["high"] is None or hi > slot["high"]:
+            slot["high"] = hi
+        if slot["low"] is None or lo < slot["low"]:
+            slot["low"] = lo
+
+    out: list[dict] = []
+    prev_close: Decimal | None = None
+    for minute in sorted(merged.keys()):
+        slot = merged[minute]
+        if not slot["volume_base"]:
+            continue
+        vwap = slot["volume_quote_fiat"] / slot["volume_base"]
+        op = prev_close if prev_close is not None else vwap
+        hi = max(slot["high"], op, vwap)
+        lo = min(slot["low"], op, vwap)
+        out.append({
+            "time": int(minute.timestamp()),
+            "open": float(op),
+            "high": float(hi),
+            "low": float(lo),
+            "close": float(vwap),
+        })
+        prev_close = vwap
+    return out
+
+
+def _merged_minute_rows(
+    start_dt,
+    end_dt,
+    base: str,
+    fiat: str,
+    peg_map: dict[str, str],
+) -> list[dict]:
+    """Per-minute rich rows for (base, fiat) merged across exchanges and stables.
+
+    Same merging semantics as ``_merged_minute_candles`` but returns
+    Decimal-valued OHLC + volume_base + trades + the set of source quote
+    currencies that contributed to each minute.
+    """
+    stables_for_fiat = [s for s, f in peg_map.items() if f == fiat]
+    merge_quotes = {fiat, *stables_for_fiat}
+
+    rates_by_minute: dict[tuple[str, datetime], Decimal] = {}
+    if stables_for_fiat:
+        rate_rows = (
+            MinuteAggregate.objects
+            .filter(
+                pair__base__code__in=stables_for_fiat,
+                pair__quote__code=fiat,
+                pair__exchange__is_active=True,
+                minute_start__gte=start_dt,
+                minute_start__lt=end_dt,
+            )
+            .values("pair__base__code", "minute_start")
+            .annotate(volume_base=Sum("volume_base"), volume_quote=Sum("volume_quote"))
+        )
+        for r in rate_rows:
+            vb = r["volume_base"] or Decimal(0)
+            if not vb:
+                continue
+            rates_by_minute[(r["pair__base__code"], r["minute_start"])] = (
+                (r["volume_quote"] or Decimal(0)) / vb
+            )
+
+    def _rate_for(stable: str, minute: datetime) -> Decimal | None:
+        rate = rates_by_minute.get((stable, minute))
+        if rate is not None:
+            return rate
+        best: tuple[datetime, Decimal] | None = None
+        for (s, m), v in rates_by_minute.items():
+            if s != stable or m > minute:
+                continue
+            if best is None or m > best[0]:
+                best = (m, v)
+        return best[1] if best else None
+
+    contrib_rows = (
+        MinuteAggregate.objects
+        .filter(
+            pair__base__code=base,
+            pair__quote__code__in=merge_quotes,
+            pair__exchange__is_active=True,
+            minute_start__gte=start_dt,
+            minute_start__lt=end_dt,
+        )
+        .values("pair__quote__code", "minute_start")
+        .annotate(
+            volume_base=Sum("volume_base"),
+            volume_quote=Sum("volume_quote"),
+            price_min=Min("price_min"),
+            price_max=Max("price_max"),
+            trades=Sum("trade_count"),
+        )
+    )
+
+    merged: dict[datetime, dict] = {}
+    for r in contrib_rows:
+        minute = r["minute_start"]
+        quote = r["pair__quote__code"]
+        rate = Decimal(1) if quote == fiat else _rate_for(quote, minute)
+        if rate is None:
+            continue
+        vb = r["volume_base"] or Decimal(0)
+        if not vb:
+            continue
+        vq = (r["volume_quote"] or Decimal(0)) * rate
+        hi = (r["price_max"] or Decimal(0)) * rate
+        lo = (r["price_min"] or Decimal(0)) * rate
+        slot = merged.setdefault(minute, {
+            "volume_base": Decimal(0),
+            "volume_quote_fiat": Decimal(0),
+            "high": None,
+            "low": None,
+            "trades": 0,
+            "quotes": set(),
+        })
+        slot["volume_base"] += vb
+        slot["volume_quote_fiat"] += vq
+        slot["trades"] += r["trades"] or 0
+        slot["quotes"].add(quote)
+        if slot["high"] is None or hi > slot["high"]:
+            slot["high"] = hi
+        if slot["low"] is None or lo < slot["low"]:
+            slot["low"] = lo
+
+    rows: list[dict] = []
+    prev_close: Decimal | None = None
+    for minute in sorted(merged.keys()):
+        slot = merged[minute]
+        vwap = slot["volume_quote_fiat"] / slot["volume_base"]
+        op = prev_close if prev_close is not None else vwap
+        hi = max(slot["high"], op, vwap)
+        lo = min(slot["low"], op, vwap)
+        rows.append({
+            "minute": minute,
+            "open": op,
+            "high": hi,
+            "low": lo,
+            "close": vwap,
+            "volume_base": slot["volume_base"],
+            "trades": slot["trades"],
+            "quotes": sorted(slot["quotes"]),
+        })
+        prev_close = vwap
+    return rows
+
+
+class CandlesView(APIView):
+    """Per-minute OHLC candles for BTC against each primary fiat.
+
+    Merges stable-quoted exchanges (USDT, USDC) into the underlying fiat using
+    same-minute stable→fiat rates, like the other endpoints.
+
+    Query params:
+        window  integer minutes back, default 120, max 1440.
+        base    base currency code, default "BTC".
+        fiat    repeatable; defaults to USD and EUR.
+    """
+
+    DEFAULT_FIATS = ("USD", "EUR")
+
+    def get(self, request):
+        try:
+            window = int(request.query_params.get("window", 120))
+        except ValueError:
+            return Response({"detail": "window must be an integer"}, status=400)
+        window = max(1, min(window, 1440))
+
+        base = request.query_params.get("base", "BTC")
+        fiats = tuple(request.query_params.getlist("fiat")) or self.DEFAULT_FIATS
+
+        now = timezone.now()
+        end_dt = now.replace(second=0, microsecond=0)
+        start_dt = end_dt - timedelta(minutes=window)
+        peg_map = _stable_peg_map()
+
+        series = {
+            fiat: _merged_minute_candles(start_dt, end_dt, base, fiat, peg_map)
+            for fiat in fiats
+        }
+        return Response({
+            "as_of": now.isoformat(),
+            "base": base,
+            "window_minutes": window,
+            "series": series,
+        })
+
+
 class HealthView(APIView):
     """Liveness probe. Returns the most recent minute aggregate timestamp."""
 
@@ -867,5 +1160,179 @@ class OverviewView(View):
             "rows": rows,
             "active_exchanges": Exchange.objects.filter(is_active=True).count(),
             "total_aggregates": MinuteAggregate.objects.count(),
+        }
+        return render(request, self.template_name, ctx)
+
+
+def _build_candle_svg(
+    rows: list[dict],
+    width: int = 1100,
+    height: int = 320,
+    pad_x: int = 8,
+    pad_y: int = 20,
+) -> dict:
+    """Layout per-minute OHLC rows into SVG-ready primitives.
+
+    Returns ``{"candles": [...], "y_ticks": [...], "x_ticks": [...], width, height, ...}``
+    so the template just renders elements without numeric work.
+    """
+    if not rows:
+        return {"candles": [], "y_ticks": [], "x_ticks": [], "width": width, "height": height}
+
+    plot_w = width - pad_x * 2
+    plot_h = height - pad_y * 2
+    n = len(rows)
+    cand_w = max(1.0, plot_w / n)
+    body_w = max(1.0, cand_w * 0.75)
+
+    lows = [float(r["low"]) for r in rows]
+    highs = [float(r["high"]) for r in rows]
+    y_min = min(lows)
+    y_max = max(highs)
+    if y_max == y_min:
+        y_max = y_min + 1
+    y_pad = (y_max - y_min) * 0.05
+    y_min -= y_pad
+    y_max += y_pad
+
+    def y_of(v: float) -> float:
+        return pad_y + (y_max - v) / (y_max - y_min) * plot_h
+
+    candles = []
+    for i, r in enumerate(rows):
+        op = float(r["open"])
+        cl = float(r["close"])
+        hi = float(r["high"])
+        lo = float(r["low"])
+        x_center = pad_x + (i + 0.5) * cand_w
+        body_top = y_of(max(op, cl))
+        body_bot = y_of(min(op, cl))
+        body_h = max(1.0, body_bot - body_top)
+        candles.append({
+            "x_body": x_center - body_w / 2,
+            "y_body": body_top,
+            "w_body": body_w,
+            "h_body": body_h,
+            "x_wick": x_center,
+            "y_high": y_of(hi),
+            "y_low": y_of(lo),
+            "color": "#3aa75e" if cl >= op else "#c44e4e",
+            "tooltip": (
+                f"{r['minute'].strftime('%H:%M')}  "
+                f"O {op:.2f}  H {hi:.2f}  L {lo:.2f}  C {cl:.2f}  "
+                f"trades {r['trades']}"
+            ),
+        })
+
+    # 5 horizontal price labels, evenly spaced.
+    y_ticks = []
+    for i in range(5):
+        v = y_max - (y_max - y_min) * i / 4
+        y_ticks.append({"y": y_of(v), "label": f"{v:.2f}"})
+
+    # X labels at start, middle, end (and quartiles if room).
+    x_ticks = []
+    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+        idx = min(n - 1, int(frac * (n - 1)))
+        x_ticks.append({
+            "x": pad_x + (idx + 0.5) * cand_w,
+            "label": rows[idx]["minute"].strftime("%H:%M"),
+        })
+
+    return {
+        "candles": candles,
+        "y_ticks": y_ticks,
+        "x_ticks": x_ticks,
+        "width": width,
+        "height": height,
+        "y_min": y_min,
+        "y_max": y_max,
+    }
+
+
+class HistoryView(View):
+    """Per-minute historical price view: chart + table for a (base, fiat).
+
+    Query params:
+        base   default ``BTC``.
+        fiat   default ``USD``.
+        window minutes back, default 360 (6h), max 1440 (24h).
+    """
+
+    template_name = "api/history.html"
+    DEFAULT_WINDOW = 360
+    MAX_WINDOW = 1440
+    WINDOW_PRESETS = (60, 360, 1440)
+    DEFAULT_BASE = "BTC"
+    DEFAULT_FIAT = "USD"
+
+    def get(self, request):
+        base = request.GET.get("base", self.DEFAULT_BASE).upper()
+        fiat = request.GET.get("fiat", self.DEFAULT_FIAT).upper()
+        try:
+            window = int(request.GET.get("window", self.DEFAULT_WINDOW))
+        except ValueError:
+            window = self.DEFAULT_WINDOW
+        window = max(1, min(window, self.MAX_WINDOW))
+
+        now = timezone.now()
+        end_dt = now.replace(second=0, microsecond=0)
+        start_dt = end_dt - timedelta(minutes=window)
+
+        peg_map = _stable_peg_map()
+        rows = _merged_minute_rows(start_dt, end_dt, base, fiat, peg_map)
+
+        # Pick fiats that actually have a trading pair (direct or pegged) on file.
+        fiat_codes = list(
+            Currency.objects.filter(is_quote=True, peg_to__isnull=True)
+            .values_list("code", flat=True)
+        )
+        fiat_codes = sorted(set(fiat_codes) | {self.DEFAULT_FIAT, "EUR"})
+
+        # Summary stats over the window.
+        summary = None
+        if rows:
+            first = rows[0]
+            last = rows[-1]
+            highs = [r["high"] for r in rows]
+            lows = [r["low"] for r in rows]
+            total_vol = sum((r["volume_base"] for r in rows), Decimal(0))
+            total_tr = sum(r["trades"] for r in rows)
+            change = last["close"] - first["open"]
+            change_pct = (change / first["open"] * Decimal(100)) if first["open"] else Decimal(0)
+            summary = {
+                "open": first["open"],
+                "close": last["close"],
+                "high": max(highs),
+                "low": min(lows),
+                "change": change,
+                "change_pct": change_pct,
+                "change_up": change >= 0,
+                "volume_base": total_vol,
+                "trades": total_tr,
+                "minute_count": len(rows),
+            }
+
+        # Table: newest-first, capped so the page stays reasonable.
+        table_rows = []
+        for r in reversed(rows[-720:]):
+            change = r["close"] - r["open"]
+            table_rows.append({**r, "change": change, "change_up": change >= 0})
+
+        chart = _build_candle_svg(rows)
+
+        ctx = {
+            "base": base,
+            "fiat": fiat,
+            "window": window,
+            "now": now,
+            "start_dt": start_dt,
+            "end_dt": end_dt,
+            "fiat_codes": fiat_codes,
+            "window_presets": self.WINDOW_PRESETS,
+            "rows": table_rows,
+            "summary": summary,
+            "chart": chart,
+            "has_rows": bool(rows),
         }
         return render(request, self.template_name, ctx)
