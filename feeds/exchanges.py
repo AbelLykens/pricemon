@@ -44,10 +44,15 @@ EXCHANGE_DEFINITIONS: list[ExchangeDef] = [
                 ("USD", "EUR", "GBP", "USDT", "USDC"),
                 extra_pairs=(("USDT", "USD"), ("USDT", "EUR"),
                              ("USDC", "USD"), ("USDC", "EUR"))),
-    # Coinbase Advanced Trade requires API credentials even to enumerate
-    # public products. Set enabled=True after configuring cryptofeed creds.
+    # Coinbase: cryptofeed's bundled adapter targets Advanced Trade WS
+    # which signs every subscription. ``feeds.cryptofeed_patches``
+    # redirects it to the legacy public Coinbase Exchange WS
+    # (ws-feed.exchange.coinbase.com) — no creds needed. Coinbase treats
+    # USDC 1:1 with USD so there is no BTC-USDC market; USDT pairs and
+    # the USDT→fiat conversion markets are used instead.
     ExchangeDef("coinbase", "COINBASE",
-                ("USD", "EUR", "GBP"), enabled=False),
+                ("USD", "EUR", "GBP", "USDT"),
+                extra_pairs=(("USDT", "USD"), ("USDT", "EUR"))),
     ExchangeDef("ascendex", "ASCENDEX",
                 ("USD", "USDT"),
                 extra_pairs=(("USDT", "USD"),)),
@@ -91,6 +96,10 @@ EXCHANGE_DEFINITIONS: list[ExchangeDef] = [
                 ("USD", "EUR", "AUD", "USDT", "USDC"),
                 extra_pairs=(("USDT", "USD"), ("USDT", "EUR"),
                              ("USDC", "EUR"))),
+    ExchangeDef("gateio", "GATEIO",
+                ("USDT", "USDC")),
+    ExchangeDef("huobi", "HUOBI",
+                ("USDT", "USDC")),
 ]
 
 
