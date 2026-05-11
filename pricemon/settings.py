@@ -132,6 +132,13 @@ CACHES = {
     }
 }
 
+# Per-view response cache TTLs (seconds). Tunable via env so we can dial
+# freshness vs. DB load without a redeploy. Set to 0 to disable a view's cache.
+API_CACHE_TTL_PRICES = int(_env("API_CACHE_TTL_PRICES", "10"))
+API_CACHE_TTL_CANDLES = int(_env("API_CACHE_TTL_CANDLES", "20"))
+API_CACHE_TTL_OVERVIEW = int(_env("API_CACHE_TTL_OVERVIEW", "5"))
+API_CACHE_TTL_HISTORY = int(_env("API_CACHE_TTL_HISTORY", "30"))
+
 
 # Pricemon-specific knobs
 FEED_WATCHDOG_TIMEOUT_SEC = int(_env("FEED_WATCHDOG_TIMEOUT_SEC", "60"))

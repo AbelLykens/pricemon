@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Currency, Exchange, MinuteAggregate, TradingPair
+from .models import Currency, Exchange, HistoricalBtcPrice, MinuteAggregate, TradingPair
 
 
 @admin.register(Exchange)
@@ -27,3 +27,12 @@ class MinuteAggregateAdmin(admin.ModelAdmin):
     list_display = ("pair", "minute_start", "trade_count", "price_vwap", "volume_base")
     list_filter = ("pair__exchange", "pair__quote")
     date_hierarchy = "minute_start"
+
+
+@admin.register(HistoricalBtcPrice)
+class HistoricalBtcPriceAdmin(admin.ModelAdmin):
+    list_display = ("observed_at", "kind", "price_usd", "price_eur", "source", "legacy_id")
+    list_filter = ("source", "kind")
+    date_hierarchy = "observed_at"
+    search_fields = ("legacy_id",)
+    readonly_fields = ("imported_at",)

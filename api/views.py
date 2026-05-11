@@ -6,11 +6,14 @@ from django.conf import settings
 from django.db.models import Max, Min, Sum
 from django.shortcuts import render
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from django.views import View
+from django.views.decorators.cache import cache_page
+from django.views.decorators.vary import vary_on_headers
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.models import Currency, Exchange, MinuteAggregate, TradingPair
+from core.models import Currency, Exchange, HistoricalBtcPrice, MinuteAggregate, TradingPair
 from feeds.current_state import get_many as get_current_many
 
 
@@ -182,6 +185,8 @@ def _missing_rate_stables(per_quote_rows, rates, peg_map, fiats=("USD", "EUR")) 
     return sorted(have_trades - set(rates.keys()))
 
 
+@method_decorator(cache_page(settings.API_CACHE_TTL_PRICES), name="dispatch")
+@method_decorator(vary_on_headers("Accept"), name="dispatch")
 class WeightedPricesView(APIView):
     """Volume-weighted prices per (base, quote) over a recent window.
 
@@ -859,11 +864,18 @@ def _merged_minute_rows(
         if slot["low"] is None or lo < slot["low"]:
             slot["low"] = lo
 
+    if base == "BTC" and fiat in ("USD", "EUR"):
+        _fill_legacy_btc_gaps(merged, start_dt, end_dt, fiat)
+
     rows: list[dict] = []
     prev_close: Decimal | None = None
     for minute in sorted(merged.keys()):
         slot = merged[minute]
-        vwap = slot["volume_quote_fiat"] / slot["volume_base"]
+        if slot["volume_base"]:
+            vwap = slot["volume_quote_fiat"] / slot["volume_base"]
+        else:
+            # Legacy-only minute: no volume, single price stamped into high/low.
+            vwap = slot["high"]
         op = prev_close if prev_close is not None else vwap
         hi = max(slot["high"], op, vwap)
         lo = min(slot["low"], op, vwap)
@@ -881,6 +893,40 @@ def _merged_minute_rows(
     return rows
 
 
+def _fill_legacy_btc_gaps(
+    merged: dict, start_dt: datetime, end_dt: datetime, fiat: str
+) -> None:
+    """For BTC/(USD|EUR), fill minutes not covered by MinuteAggregate from
+    ``HistoricalBtcPrice``. Each legacy minute is stamped with a
+    ``"legacy:<kind>"`` quote sentinel so the template can surface it.
+    """
+    price_field = f"price_{fiat.lower()}"
+    legacy_rows = (
+        HistoricalBtcPrice.objects
+        .filter(
+            observed_at__gte=start_dt,
+            observed_at__lt=end_dt,
+            **{f"{price_field}__isnull": False},
+        )
+        .values("observed_at", price_field, "kind")
+    )
+    for r in legacy_rows:
+        minute = r["observed_at"].replace(second=0, microsecond=0)
+        if minute in merged:
+            continue  # real data wins
+        price = r[price_field]
+        merged[minute] = {
+            "volume_base": Decimal(0),
+            "volume_quote_fiat": Decimal(0),
+            "high": price,
+            "low": price,
+            "trades": 0,
+            "quotes": {f"legacy:{r['kind'] or 'reg'}"},
+        }
+
+
+@method_decorator(cache_page(settings.API_CACHE_TTL_CANDLES), name="dispatch")
+@method_decorator(vary_on_headers("Accept"), name="dispatch")
 class CandlesView(APIView):
     """Per-minute OHLC candles for BTC against each primary fiat.
 
@@ -936,10 +982,12 @@ class HealthView(APIView):
         })
 
 
+@method_decorator(cache_page(settings.API_CACHE_TTL_OVERVIEW), name="dispatch")
 class OverviewView(View):
     """Server-rendered single-page dashboard for BTC pricing."""
 
     template_name = "api/overview.html"
+    fragment_template_name = "api/_overview_content.html"
     SHORT_WINDOW_MIN = 5
     LONG_WINDOW_MIN = 60
     # Hero cards: these quotes get top billing, then others alphabetical.
@@ -1161,7 +1209,41 @@ class OverviewView(View):
             "active_exchanges": Exchange.objects.filter(is_active=True).count(),
             "total_aggregates": MinuteAggregate.objects.count(),
         }
-        return render(request, self.template_name, ctx)
+        template = (
+            self.fragment_template_name
+            if request.GET.get("fragment") == "1"
+            else self.template_name
+        )
+        return render(request, template, ctx)
+
+
+def _downsample_for_chart(rows: list[dict], max_candles: int = 1100) -> list[dict]:
+    """Bucket-aggregate ``rows`` into at most ``max_candles`` OHLC candles.
+
+    The chart renderer outputs one SVG group per row; rendering 10k+ candles
+    blows the page past the memcached 1 MB cap and is unreadable anyway. We
+    keep the per-minute table un-downsampled.
+    """
+    n = len(rows)
+    if n <= max_candles:
+        return rows
+    bucket = (n + max_candles - 1) // max_candles
+    out: list[dict] = []
+    for i in range(0, n, bucket):
+        chunk = rows[i:i + bucket]
+        highs = [c["high"] for c in chunk]
+        lows = [c["low"] for c in chunk]
+        out.append({
+            "minute": chunk[0]["minute"],
+            "open": chunk[0]["open"],
+            "high": max(highs),
+            "low": min(lows),
+            "close": chunk[-1]["close"],
+            "volume_base": sum((c["volume_base"] for c in chunk), Decimal(0)),
+            "trades": sum(c["trades"] for c in chunk),
+            "quotes": chunk[-1]["quotes"],
+        })
+    return out
 
 
 def _build_candle_svg(
@@ -1250,6 +1332,7 @@ def _build_candle_svg(
     }
 
 
+@method_decorator(cache_page(settings.API_CACHE_TTL_HISTORY), name="dispatch")
 class HistoryView(View):
     """Per-minute historical price view: chart + table for a (base, fiat).
 
@@ -1261,8 +1344,8 @@ class HistoryView(View):
 
     template_name = "api/history.html"
     DEFAULT_WINDOW = 360
-    MAX_WINDOW = 1440
-    WINDOW_PRESETS = (60, 360, 1440)
+    MAX_WINDOW = 10080
+    WINDOW_PRESETS = (60, 360, 1440, 10080)
     DEFAULT_BASE = "BTC"
     DEFAULT_FIAT = "USD"
 
@@ -1319,7 +1402,7 @@ class HistoryView(View):
             change = r["close"] - r["open"]
             table_rows.append({**r, "change": change, "change_up": change >= 0})
 
-        chart = _build_candle_svg(rows)
+        chart = _build_candle_svg(_downsample_for_chart(rows))
 
         ctx = {
             "base": base,

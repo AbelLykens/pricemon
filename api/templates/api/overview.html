@@ -3,7 +3,6 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="60">
 <title>pricemon · BTC overview</title>
 <style>
   :root { color-scheme: dark; }
@@ -17,7 +16,12 @@
   .card { background: #1a1c20; border: 1px solid #25282d; border-radius: 8px;
           padding: 18px 22px; }
   .card .label { color: #8b8f95; font-size: 12px; text-transform: uppercase;
-                 letter-spacing: 0.06em; }
+                 letter-spacing: 0.06em;
+                 display: flex; align-items: baseline; justify-content: space-between;
+                 gap: 8px; }
+  .card .label .json-link { font-size: 10px; letter-spacing: 0.04em;
+                            color: #5d6168; text-transform: uppercase; }
+  .card .label .json-link:hover { color: #6aa6ff; }
   .card .price { font-size: 32px; font-weight: 600; margin-top: 6px; font-variant-numeric: tabular-nums; }
   .card .price.live { color: #e8e8e8; }
   .card .price.stale { color: #d39e3a; }
@@ -67,110 +71,62 @@
   .chart-card .chart-status { font-size: 11px; color: #5d6168; font-variant-numeric: tabular-nums; }
   .chart-card .chart-status.bad { color: #c44e4e; }
   .chart-card .chart-box { height: 280px; }
+
+  /* AJAX auto-refresh chrome */
+  .progress-bar { position: fixed; top: 0; left: 0; height: 2px;
+                  background: linear-gradient(90deg, #6aa6ff 0%, #3aa75e 100%);
+                  width: 0; opacity: 0; pointer-events: none; z-index: 100;
+                  transition: width 0.25s ease-out, opacity 0.4s ease-out; }
+  .progress-bar.loading { opacity: 1; width: 70%;
+                          transition: width 6s cubic-bezier(.05,.7,.1,1), opacity 0.15s; }
+  .progress-bar.done { opacity: 0; width: 100%;
+                       transition: width 0.18s ease-out, opacity 0.45s ease-out 0.2s; }
+
+  .status-pill { display: inline-flex; align-items: center; gap: 8px;
+                 padding: 3px 10px 3px 8px; border-radius: 999px;
+                 background: #14161a; border: 1px solid #25282d;
+                 color: #d8d8d8; font-size: 12px; line-height: 1;
+                 font-variant-numeric: tabular-nums; cursor: default; }
+  .status-pill .live-dot { margin: 0; }
+  .status-pill .status-text { color: #8b8f95; }
+  .status-pill[data-state="ok"] .live-dot { background: #3aa75e; }
+  .status-pill[data-state="loading"] .live-dot { background: #6aa6ff; }
+  .status-pill[data-state="paused"] .live-dot { background: #5d6168;
+                                                animation: none; }
+  .status-pill[data-state="paused"] .status-text { color: #5d6168; }
+  .status-pill[data-state="error"] .live-dot { background: #c44e4e;
+                                               animation: none; }
+  .status-pill[data-state="error"] .status-text { color: #c44e4e; }
+  .refresh-btn { background: transparent; color: #6aa6ff; border: 0;
+                 cursor: pointer; font: inherit; padding: 0 2px;
+                 text-decoration: none; }
+  .refresh-btn:hover { text-decoration: underline; }
+  .refresh-btn:disabled { color: #5d6168; cursor: wait; }
+
+  #overview-content { transition: opacity 0.18s ease-out; }
+  #overview-content.refreshing { opacity: 0.55; }
+  @keyframes flash-in { from { opacity: 0.2 } to { opacity: 1 } }
+  #overview-content.flash { animation: flash-in 0.45s ease-out; }
+  .sub-detail { color: #8b8f95; margin-bottom: 14px; font-size: 12px;
+                font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
+  <div class="progress-bar" id="progress-bar"></div>
   <h1>pricemon · BTC overview</h1>
   <div class="sub">
-    {{ active_exchanges }} active exchanges · {{ total_aggregates }} minute aggregates ·
-    refreshed {{ now|date:"Y-m-d H:i:s" }} UTC · auto-refresh 60 s ·
+    <span class="status-pill" id="live-status" data-state="loading">
+      <span class="live-dot"></span>
+      <span class="status-text">connecting…</span>
+    </span>
+    <button type="button" class="refresh-btn" id="refresh-now" title="Refresh now">refresh</button> ·
     <a href="/history/">history</a> ·
     <a href="/api/current/">live JSON</a> ·
     <a href="/api/prices/?window={{ short_window }}">window JSON</a>
   </div>
 
-  {% if stable_rates_live %}
-    <div class="rates">
-      live stable rates ·
-      {% for stable, info in stable_rates_live.items %}
-        <span><b>{{ stable }}/{{ info.fiat }}</b> {{ info.rate|floatformat:4 }} <span style="color:#5d6168">({{ info.exchanges }} ex)</span></span>
-      {% endfor %}
-    </div>
-  {% endif %}
-
-  <div class="hero">
-    {% for fiat, slot in live_fiat.items %}
-      <div class="card fiat-merged">
-        <div class="label"><span class="live-dot"></span>BTC / {{ fiat }} · now
-          {% if slot.components|length > 1 %}<span class="merge-tag">merged</span>{% endif %}
-        </div>
-        {% if slot.price %}
-          <div class="price live">{{ slot.price|floatformat:2 }} {{ fiat }}</div>
-          <div class="components">
-            {% for c in slot.components %}
-              <span>{{ c.source_quote }}{% if c.source_quote != fiat %} × {{ c.rate|floatformat:4 }}{% endif %}</span>
-            {% endfor %}
-          </div>
-        {% else %}
-          <div class="price stale">—</div>
-          <div class="meta">no fresh feed</div>
-        {% endif %}
-      </div>
-    {% endfor %}
-
-    {% for quote, slot in live_current.items %}
-      {% if quote not in live_fiat %}
-        <div class="card">
-          <div class="label"><span class="live-dot"></span>BTC / {{ quote }} · now</div>
-          {% if slot.price %}
-            <div class="price live">{{ slot.price|floatformat:2 }} {{ quote }}</div>
-            <div class="meta">
-              {{ slot.exchanges }} exchange{{ slot.exchanges|pluralize }} live ·
-              fresh window {{ fresh_window_sec }} s
-            </div>
-          {% else %}
-            <div class="price stale">—</div>
-            <div class="meta">no fresh feed</div>
-          {% endif %}
-        </div>
-      {% endif %}
-    {% endfor %}
-
-    {% for fiat, info in global_vwap_fiat.items %}
-      <div class="card fiat-merged">
-        <div class="label">BTC / {{ fiat }} VWAP · last {{ short_window }} min
-          {% if info.components|length > 1 %}<span class="merge-tag">merged</span>{% endif %}
-        </div>
-        {% if info.vwap %}
-          <div class="price">{{ info.vwap|floatformat:2 }} {{ fiat }}</div>
-          <div class="meta">
-            {{ info.trades }} trades · {{ info.volume_base|floatformat:6 }} BTC traded
-          </div>
-          <div class="components">
-            {% for c in info.components %}
-              <span>{{ c.source_quote }} {{ c.volume_base|floatformat:3 }}{% if c.source_quote != fiat %} × {{ c.rate|floatformat:4 }}{% endif %}</span>
-            {% endfor %}
-          </div>
-        {% else %}
-          <div class="price" style="color:#5d6168">—</div>
-          <div class="meta">no trades in window</div>
-        {% endif %}
-      </div>
-    {% endfor %}
-
-    {% for quote, info in global_vwap.items %}
-      {% if quote not in global_vwap_fiat %}
-        <div class="card">
-          <div class="label">BTC / {{ quote }} VWAP · last {{ short_window }} min</div>
-          {% if info.vwap %}
-            <div class="price">{{ info.vwap|floatformat:2 }} {{ quote }}</div>
-            <div class="meta">
-              {{ info.trades }} trades · {{ info.volume_base|floatformat:6 }} BTC traded
-            </div>
-          {% else %}
-            <div class="price" style="color:#5d6168">—</div>
-            <div class="meta">no trades in window</div>
-          {% endif %}
-        </div>
-      {% endif %}
-    {% endfor %}
-
-    {% if not live_current and not global_vwap and not live_fiat and not global_vwap_fiat %}
-      <div class="card">
-        <div class="label">No data yet</div>
-        <div class="meta">Waiting for daemons to flush their first minute…</div>
-      </div>
-    {% endif %}
+  <div id="overview-content">
+    {% include "api/_overview_content.html" %}
   </div>
 
   <div class="charts" id="charts">
@@ -245,6 +201,118 @@
     <a href="/api/health/">/api/health/</a> ·
     <a href="/admin/">/admin/</a>
   </div>
+
+  <script>
+  // Background AJAX refresh for the overview body (cards, rates, table).
+  // Charts are refreshed separately by the chart IIFE below.
+  (function () {
+    const REFRESH_MS = 10000;
+    const ENDPOINT = '{% url "overview" %}?fragment=1';
+    const content = document.getElementById('overview-content');
+    const pill = document.getElementById('live-status');
+    const pillText = pill.querySelector('.status-text');
+    const refreshBtn = document.getElementById('refresh-now');
+    const progress = document.getElementById('progress-bar');
+    if (!content || !pill) return;
+
+    let lastSuccess = Date.now();
+    let inFlight = null;
+    let timer = null;
+
+    function setState(state, text) {
+      pill.dataset.state = state;
+      if (text !== undefined) pillText.textContent = text;
+    }
+
+    function fmtAge(ms) {
+      const s = Math.max(0, Math.round(ms / 1000));
+      if (s < 60) return `live · updated ${s}s ago`;
+      const m = Math.floor(s / 60);
+      return `live · updated ${m}m${(s % 60).toString().padStart(2,'0')}s ago`;
+    }
+
+    function startProgress() {
+      progress.classList.remove('done');
+      // Force a reflow so the next class change re-triggers the transition.
+      void progress.offsetWidth;
+      progress.classList.add('loading');
+    }
+    function endProgress() {
+      progress.classList.remove('loading');
+      progress.classList.add('done');
+    }
+
+    async function refresh(manual) {
+      if (inFlight) return;
+      if (!manual && document.hidden) return;
+      setState('loading', 'updating…');
+      startProgress();
+      refreshBtn.disabled = true;
+      const ctl = new AbortController();
+      const timeoutId = setTimeout(() => ctl.abort(), 9000);
+      inFlight = fetch(ENDPOINT, {
+        cache: 'no-store',
+        signal: ctl.signal,
+        headers: { 'X-Requested-With': 'fetch' },
+      })
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.text();
+        })
+        .then(html => {
+          content.classList.add('refreshing');
+          requestAnimationFrame(() => {
+            content.innerHTML = html;
+            content.classList.remove('refreshing');
+            content.classList.remove('flash');
+            void content.offsetWidth;
+            content.classList.add('flash');
+          });
+          lastSuccess = Date.now();
+          setState('ok', fmtAge(0));
+        })
+        .catch(err => {
+          setState('error', `error · ${err.message || err}`);
+        })
+        .finally(() => {
+          clearTimeout(timeoutId);
+          endProgress();
+          refreshBtn.disabled = false;
+          inFlight = null;
+        });
+    }
+
+    function tickAgeLabel() {
+      if (pill.dataset.state === 'ok') {
+        setState('ok', fmtAge(Date.now() - lastSuccess));
+      } else if (pill.dataset.state === 'paused') {
+        setState('paused', 'paused · tab hidden');
+      }
+    }
+
+    function schedule() {
+      if (timer) clearInterval(timer);
+      timer = setInterval(() => refresh(false), REFRESH_MS);
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        if (pill.dataset.state === 'ok') setState('paused', 'paused · tab hidden');
+        if (timer) { clearInterval(timer); timer = null; }
+      } else {
+        setState('ok', fmtAge(Date.now() - lastSuccess));
+        refresh(false);
+        schedule();
+      }
+    });
+    refreshBtn.addEventListener('click', () => refresh(true));
+    setInterval(tickAgeLabel, 1000);
+
+    // The page was just server-rendered, so treat that as a successful "fetch".
+    setState('ok', fmtAge(0));
+    schedule();
+  })();
+  </script>
 
   <script src="{% static 'api/vendor/lightweight-charts.standalone.production.js' %}"></script>
   <script>
