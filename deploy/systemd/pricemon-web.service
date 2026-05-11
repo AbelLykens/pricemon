@@ -1,0 +1,34 @@
+[Unit]
+Description=Pricemon Django (gunicorn) web service
+After=network-online.target postgresql.service memcached.service
+Wants=network-online.target memcached.service
+PartOf=pricemon.target
+
+[Service]
+Type=notify
+User=pricemon
+Group=pricemon
+RuntimeDirectory=pricemon
+RuntimeDirectoryMode=0755
+WorkingDirectory=/opt/pricemon
+EnvironmentFile=/opt/pricemon/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/venv/bin/gunicorn pricemon.wsgi:application \
+    --bind unix:/run/pricemon/gunicorn.sock \
+    --umask 0117 \
+    --workers 3 \
+    --threads 2 \
+    --access-logfile - \
+    --error-logfile - \
+    --timeout 30
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/pricemon /var/log/pricemon
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

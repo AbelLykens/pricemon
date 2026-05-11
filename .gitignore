@@ -1,0 +1,24 @@
+# Secrets / runtime config
+.env
+.env.*
+!.env.example
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Django runtime artefacts
+staticfiles/
+media/
+*.log
+
+# Process / socket state
+.gunicorn/
+.claude/
+logs/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store

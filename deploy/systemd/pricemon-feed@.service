@@ -1,0 +1,39 @@
+[Unit]
+Description=Pricemon trade-feed daemon for %i
+Documentation=https://github.com/bmoscon/cryptofeed
+PartOf=pricemon-feeds.target
+After=network-online.target postgresql.service memcached.service
+Wants=network-online.target memcached.service
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=pricemon
+Group=pricemon
+WorkingDirectory=/opt/pricemon
+EnvironmentFile=/opt/pricemon/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/venv/bin/python /opt/pricemon/manage.py run_feed --exchange %i
+# Auto-restart on any exit
+Restart=always
+RestartSec=5
+# Some exchanges (e.g. Gemini) make a slow symbol-listing HTTP call from
+# Feed.__init__ before READY=1; allow plenty of headroom.
+TimeoutStartSec=240
+# Self-detection: if no WATCHDOG=1 ping for this long, kill+restart.
+WatchdogSec=120
+TimeoutStopSec=30
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/pricemon /var/log/pricemon
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=pricemon-feeds.target
