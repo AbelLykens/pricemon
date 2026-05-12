@@ -4,9 +4,14 @@ End-to-end setup for a fresh Debian 13 box: Postgres, memcached, gunicorn,
 nginx, the Django web service, and one systemd unit per exchange feed.
 
 This guide describes a **live-only fallback instance**: it serves the live
-`/current/` endpoint and runs the feed daemons, but does not seed the static
-exchange/pair registry and does not import historical archives. The primary
-instance remains the source of truth for accumulated history.
+`/current/` endpoint and runs the feed daemons, but does not import the
+historical archive (legacy BTC CSV). The primary instance remains the
+source of truth for accumulated history.
+
+The static exchange/pair registry (`seed_pairs`) is *not* historical data —
+it materialises the exchange/currency/pair rows defined in
+`feeds/exchanges.py` into the DB, and the feed daemons refuse to start
+without it. Run it on the fallback too.
 
 Targets the reference layout used in `deploy/` — app at `/opt/pricemon`,
 venv at `/opt/venv`, dedicated `pricemon` system user, runtime socket at
@@ -104,18 +109,26 @@ Required fields:
 
 Everything else has a working default and can be left alone.
 
-## 7. Migrate and collect static
+## 7. Migrate, seed the registry, collect static
 
 Run as the `pricemon` user so file ownership stays correct:
 
 ```bash
 sudo -u pricemon /opt/venv/bin/python /opt/pricemon/manage.py migrate
+sudo -u pricemon /opt/venv/bin/python /opt/pricemon/manage.py seed_pairs
 sudo -u pricemon /opt/venv/bin/python /opt/pricemon/manage.py collectstatic --noinput
 ```
 
-Do **not** run `seed_pairs` on a fallback instance — this box is live-only,
-so the exchange/pair registry is intentionally left to be populated by the
-feed daemons as live trades come in.
+`seed_pairs` is idempotent — it materialises every supported exchange,
+currency, and trading pair from `feeds/exchanges.py` into the DB. The
+feed daemons look these rows up at startup and refuse to start without
+them (`Exchange.DoesNotExist` at `feeds/daemon.py:39`). This is static
+metadata baked into the repo, not historical price data — it's safe to
+run on the fallback.
+
+If you've already enabled the feed services and they're restart-looping
+with `Exchange.DoesNotExist`, run `seed_pairs` now and then
+`systemctl restart pricemon-feeds.target`.
 
 ## 8. systemd units
 
