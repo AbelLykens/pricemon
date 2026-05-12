@@ -1,0 +1,15 @@
+[Unit]
+Description=Run pricemon backfill puller every 5 minutes
+# Primary host only.
+
+[Timer]
+# 2 minutes after boot, then every 5 minutes. Persistent=true catches up
+# the last firing if the host was down.
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+AccuracySec=30s
+Unit=pricemon-backfill.service
+
+[Install]
+WantedBy=timers.target

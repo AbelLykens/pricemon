@@ -290,6 +290,79 @@ Open the docs in a browser:
 - `http://<host>/` — overview page
 - `http://<host>/history/` — per-minute candle history
 
+## 12. Cross-host backfill (primary ↔ fallback)
+
+Pricemon supports filling primary-side gaps in `feeds_minuteaggregate`
+from a peer host over HTTP. The fallback exposes an auth-gated endpoint
+`/api/v1/internal/aggregates/`; the primary runs a systemd timer that
+pulls from it. The fallback's data only covers the 5 exchanges it runs
+(coinbase, binance, kraken, bitstamp, bitfinex), and rows are inserted
+with `ON CONFLICT DO NOTHING` so the primary's own data is never
+overwritten.
+
+Skip this section unless you are running both a primary and a fallback
+and want gap-filling enabled.
+
+### Step A — on the fallback: enable the endpoint
+
+```bash
+# Generate a token; copy the output, you'll need it on the primary.
+TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
+echo "BACKFILL_API_TOKEN=$TOKEN" >> /opt/pricemon/.env
+echo "$TOKEN"
+systemctl restart pricemon-web.service
+
+# Verify the endpoint is reachable and auth is enforced.
+curl -sf -m 5 -o /dev/null -w 'unauth: %{http_code}\n' \
+    'http://127.0.0.1/api/v1/internal/aggregates/?since=2026-01-01T00:00:00Z'
+curl -sf -m 5 -w 'auth: %{http_code}\n' \
+    -H "Authorization: Bearer $TOKEN" \
+    'http://127.0.0.1/api/v1/internal/aggregates/?since=2026-01-01T00:00:00Z&limit=1' \
+    | head -c 200; echo
+# Expect: unauth: 403   auth: 200
+```
+
+### Step B — on the primary: configure the puller
+
+```bash
+# Append the puller config, substituting the token printed in Step A
+# and the fallback's address.
+cat >> /opt/pricemon/.env <<EOF
+
+FALLBACK_BASE_URL=http://10.0.40.62
+FALLBACK_BACKFILL_TOKEN=PASTE_TOKEN_FROM_STEP_A
+EOF
+```
+
+### Step C — on the primary: dry-run, then install the timer
+
+```bash
+# One-shot dry run to verify the wiring and see what would be inserted.
+sudo -u pricemon /opt/venv/bin/python /opt/pricemon/manage.py \
+    backfill_from_fallback --lookback-minutes 60 --dry-run
+
+# Install the timer + service units and enable the timer (not the service).
+install -m 0644 /opt/pricemon/deploy/systemd/pricemon-backfill.service /etc/systemd/system/
+install -m 0644 /opt/pricemon/deploy/systemd/pricemon-backfill.timer   /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now pricemon-backfill.timer
+systemctl list-timers pricemon-backfill.timer --no-pager
+journalctl -u pricemon-backfill.service -n 30 --no-pager
+```
+
+The timer fires 2 min after boot and every 5 min after. Each run prints
+`fetched=N inserted=M skipped_pair_missing=K` to the journal.
+
+### Tuning
+
+| Flag | Default | Use case |
+| --- | --- | --- |
+| `--lookback-minutes` | 1440 | Drop to 60 for routine catch-up; raise to one-shot a longer recovery (e.g. 4320 = 3 days) |
+| `--min-age-minutes` | 5 | Lets primary's own late writes land first; raise if your feeds frequently catch up >5 min late |
+| `--chunk-hours` | 6 | Time-range page size; mostly a memory/perf knob |
+| `--exchange` | (all) | Repeatable; restrict to e.g. `--exchange coinbase --exchange kraken` |
+| `--dry-run` | off | Counts but does not insert |
+
 ## Operational notes
 
 - Restart the web tier after editing templates or views:

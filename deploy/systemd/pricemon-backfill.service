@@ -1,0 +1,24 @@
+[Unit]
+Description=Pricemon backfill puller (pulls MinuteAggregate gaps from fallback peer)
+# Primary host only — fallback hosts don't run this. Install on the primary
+# alongside the existing pricemon-web / pricemon-feed@ units. Fired by the
+# matching .timer; do not enable this unit directly.
+After=network-online.target postgresql.service pricemon-web.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pricemon
+Group=pricemon
+WorkingDirectory=/opt/pricemon
+EnvironmentFile=/opt/pricemon/.env
+Environment=PYTHONUNBUFFERED=1
+# Default knobs match the in-code defaults (24h lookback, 5min min-age).
+ExecStart=/opt/venv/bin/python /opt/pricemon/manage.py backfill_from_fallback
+# Don't pile up if the fallback is slow — let the next timer fire handle it.
+TimeoutStartSec=300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/pricemon /var/log/pricemon
+ProtectHome=true

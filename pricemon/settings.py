@@ -187,3 +187,17 @@ OUTLIER_EXCHANGE_MAX_DEV_PCT = Decimal(_env("OUTLIER_EXCHANGE_MAX_DEV_PCT", "0.5
 # Clip per-exchange price_min/price_max to vwap ± this many percent before
 # they feed into merged OHLC wicks.
 OUTLIER_WICK_MAX_PCT = Decimal(_env("OUTLIER_WICK_MAX_PCT", "2.0"))
+
+
+# --- Cross-host backfill ---
+# Server side (fallback role): bearer token that the /api/v1/internal/
+# aggregates endpoint requires. Unset => endpoint is disabled (returns 403).
+BACKFILL_API_TOKEN = _env("BACKFILL_API_TOKEN", "")
+
+# Client side (primary role): how to reach the fallback's internal endpoint,
+# plus the token it expects. Unset => `manage.py backfill_from_fallback`
+# refuses to run.
+FALLBACK_BASE_URL = _env("FALLBACK_BASE_URL", "")
+FALLBACK_BACKFILL_TOKEN = _env("FALLBACK_BACKFILL_TOKEN", "")
+# Per-request timeout for backfill HTTP calls (seconds).
+FALLBACK_BACKFILL_TIMEOUT_SEC = int(_env("FALLBACK_BACKFILL_TIMEOUT_SEC", "30"))

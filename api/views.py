@@ -17,6 +17,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from api.outliers import OutlierReport, clip_wick, filter_exchange_outliers
+from api.permissions import BackfillTokenPermission
 from core.models import Currency, Exchange, HistoricalBtcPrice, MinuteAggregate, TradingPair
 from feeds.current_state import get_many as get_current_many
 
@@ -1331,6 +1332,101 @@ class HealthView(APIView):
             "now": timezone.now().isoformat(),
             "latest_minute": latest["minute_start"].isoformat() if latest else None,
         })
+
+
+class InternalAggregatesView(APIView):
+    """Raw MinuteAggregate rows for peer hosts pulling backfill data.
+
+    Not part of the public API. Auth is by bearer token against
+    ``BACKFILL_API_TOKEN``. The endpoint is hidden from the OpenAPI schema
+    via ``api.schema_hooks.keep_v1_only`` filtering out /api/v1/internal/.
+
+    Rows are emitted with natural keys (exchange slug + base/quote codes)
+    rather than local PKs, so the caller can match them against its own
+    pair rows without needing the same seed_pairs run order.
+    """
+
+    permission_classes = [BackfillTokenPermission]
+
+    DEFAULT_LIMIT = 1000
+    MAX_LIMIT = 2000
+
+    def get(self, request):
+        since_raw = request.query_params.get("since")
+        until_raw = request.query_params.get("until")
+        if not since_raw:
+            return Response({"detail": "since is required (ISO-8601 UTC)"}, status=400)
+        since = _parse_iso(since_raw)
+        if since is None:
+            return Response({"detail": "since: invalid ISO-8601"}, status=400)
+        if until_raw:
+            until = _parse_iso(until_raw)
+            if until is None:
+                return Response({"detail": "until: invalid ISO-8601"}, status=400)
+        else:
+            until = timezone.now() - timedelta(minutes=1)
+        if until <= since:
+            return Response({"detail": "until must be after since"}, status=400)
+
+        try:
+            limit = int(request.query_params.get("limit", self.DEFAULT_LIMIT))
+        except ValueError:
+            return Response({"detail": "limit must be an integer"}, status=400)
+        limit = max(1, min(limit, self.MAX_LIMIT))
+
+        try:
+            cursor = int(request.query_params.get("cursor", "0"))
+        except ValueError:
+            return Response({"detail": "cursor must be an integer"}, status=400)
+
+        exchanges = request.query_params.getlist("exchange")
+
+        qs = (
+            MinuteAggregate.objects
+            .filter(minute_start__gte=since, minute_start__lt=until, id__gt=cursor)
+            .select_related("pair__exchange", "pair__base", "pair__quote")
+            .order_by("id")
+        )
+        if exchanges:
+            qs = qs.filter(pair__exchange__slug__in=exchanges)
+
+        rows = list(qs[:limit + 1])
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+        out = [
+            {
+                "id": r.id,
+                "exchange": r.pair.exchange.slug,
+                "base": r.pair.base.code,
+                "quote": r.pair.quote.code,
+                "minute_start": r.minute_start.isoformat(),
+                "trade_count": r.trade_count,
+                "volume_base": str(r.volume_base),
+                "volume_quote": str(r.volume_quote),
+                "price_min": str(r.price_min),
+                "price_max": str(r.price_max),
+                "price_avg": str(r.price_avg),
+                "price_vwap": str(r.price_vwap),
+            }
+            for r in rows
+        ]
+        return Response({
+            "rows": out,
+            "next_cursor": rows[-1].id if has_more and rows else None,
+            "count": len(out),
+        })
+
+
+def _parse_iso(value: str):
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        # TIME_ZONE = "UTC" in settings, so make_aware lands on UTC.
+        dt = timezone.make_aware(dt)
+    return dt
 
 
 @method_decorator(cache_page(settings.API_CACHE_TTL_OVERVIEW), name="dispatch")

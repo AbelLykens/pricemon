@@ -6,6 +6,7 @@ from .views import (
     CurrentPriceView,
     HealthView,
     HistoryView,
+    InternalAggregatesView,
     OverviewView,
     WeightedPricesView,
 )
@@ -16,6 +17,8 @@ urlpatterns = [
     path("candles/", CandlesView.as_view(), name="candles"),
     path("candles/agg/", CandlesAggView.as_view(), name="candles-agg"),
     path("health/", HealthView.as_view(), name="health"),
+    # Auth-gated, excluded from the OpenAPI schema (see api/schema_hooks.py).
+    path("internal/aggregates/", InternalAggregatesView.as_view(), name="internal-aggregates"),
 ]
 
 # Mounted at the project root in pricemon/urls.py
