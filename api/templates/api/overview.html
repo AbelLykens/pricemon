@@ -164,59 +164,6 @@
     {% include "api/_overview_content.html" %}
   </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th>exchange</th>
-        <th>pair</th>
-        <th>now</th>
-        <th>last minute (UTC)</th>
-        <th>VWAP</th>
-        <th>min</th>
-        <th>max</th>
-        <th>trades / min</th>
-        <th>trades / hr</th>
-        <th>volume / hr (BTC)</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-        <tr>
-          <td>
-            {% if r.fresh %}<span class="dot ok"  title="recent (≤ 3 min)"></span>
-            {% elif r.stale %}<span class="dot bad" title="stale (no minute in 10 min)"></span>
-            {% else %}<span class="dot warn" title="aging"></span>{% endif %}
-            {{ r.exchange }}
-          </td>
-          <td>{{ r.symbol }}</td>
-          {% if r.current_price %}
-            <td class="num" style="color:{% if r.current_fresh %}#e8e8e8{% else %}#d39e3a{% endif %}">
-              {{ r.current_price|floatformat:2 }}
-              {% if not r.current_fresh %}<span class="muted">({{ r.current_age_sec|floatformat:0 }}s)</span>{% endif %}
-            </td>
-          {% else %}
-            <td class="muted">—</td>
-          {% endif %}
-          {% if r.latest_minute %}
-            <td class="num">{{ r.latest_minute|date:"H:i" }} <span class="muted">({{ r.age_sec|floatformat:0 }} s ago)</span></td>
-            <td class="num">{{ r.vwap|floatformat:2 }}</td>
-            <td class="num">{{ r.min|floatformat:2 }}</td>
-            <td class="num">{{ r.max|floatformat:2 }}</td>
-            <td class="num">{{ r.trades_minute }}</td>
-          {% else %}
-            <td class="muted">—</td>
-            <td class="muted">—</td>
-            <td class="muted">—</td>
-            <td class="muted">—</td>
-            <td class="muted">—</td>
-          {% endif %}
-          <td class="num">{{ r.trades_hour|default:0 }}</td>
-          <td class="num">{{ r.volume_hour|floatformat:6|default:"0.000000" }}</td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-
   <div class="footer">
     Endpoints: <a href="/api/v1/docs/">/api/v1/docs/</a> ·
     <a href="/api/v1/prices/">/api/v1/prices/</a> ·
