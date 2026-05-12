@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    CandlesAggView,
     CandlesView,
     CurrentPriceView,
     HealthView,
@@ -13,6 +14,7 @@ urlpatterns = [
     path("prices/", WeightedPricesView.as_view(), name="weighted-prices"),
     path("current/", CurrentPriceView.as_view(), name="current-prices"),
     path("candles/", CandlesView.as_view(), name="candles"),
+    path("candles/agg/", CandlesAggView.as_view(), name="candles-agg"),
     path("health/", HealthView.as_view(), name="health"),
 ]
 

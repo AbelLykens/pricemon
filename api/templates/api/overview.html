@@ -61,7 +61,7 @@
   a { color: #6aa6ff; text-decoration: none; }
   a:hover { text-decoration: underline; }
   .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-            gap: 16px; margin-bottom: 28px; }
+            gap: 16px; margin-bottom: 18px; }
   .chart-card { background: #1a1c20; border: 1px solid #25282d; border-radius: 8px;
                 padding: 14px 16px 10px; }
   .chart-card .chart-head { display: flex; align-items: baseline; justify-content: space-between;
@@ -71,6 +71,17 @@
   .chart-card .chart-status { font-size: 11px; color: #5d6168; font-variant-numeric: tabular-nums; }
   .chart-card .chart-status.bad { color: #c44e4e; }
   .chart-card .chart-box { height: 280px; }
+  .chart-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+                    margin-bottom: 12px; padding: 8px 12px;
+                    background: #14161a; border: 1px solid #25282d; border-radius: 8px; }
+  .chart-controls .label { color: #8b8f95; font-size: 11px; text-transform: uppercase;
+                           letter-spacing: 0.06em; margin-right: 4px; }
+  .chart-controls .pill { display: inline-block; padding: 4px 10px; border-radius: 999px;
+                          border: 1px solid #25282d; background: transparent; color: #d8d8d8;
+                          font: inherit; font-size: 12px; cursor: pointer;
+                          font-variant-numeric: tabular-nums; }
+  .chart-controls .pill:hover { background: #1a1c20; }
+  .chart-controls .pill.active { background: #2a3548; border-color: #3a4757; color: #e8e8e8; }
 
   /* AJAX auto-refresh chrome */
   .progress-bar { position: fixed; top: 0; left: 0; height: 2px;
@@ -121,24 +132,36 @@
     </span>
     <button type="button" class="refresh-btn" id="refresh-now" title="Refresh now">refresh</button> ·
     <a href="/history/">history</a> ·
-    <a href="/api/current/">live JSON</a> ·
-    <a href="/api/prices/?window={{ short_window }}">window JSON</a>
+    <a href="/api/v1/docs/" title="Swagger UI">API docs</a> ·
+    <a href="/api/v1/current/">live JSON</a> ·
+    <a href="/api/v1/prices/?window={{ short_window }}">window JSON</a>
   </div>
 
-  <div id="overview-content">
-    {% include "api/_overview_content.html" %}
+  <div class="chart-controls" id="chart-controls">
+    <span class="label">window</span>
+    <button type="button" class="pill" data-chart-window="60">1h</button>
+    <button type="button" class="pill" data-chart-window="120">2h</button>
+    <button type="button" class="pill" data-chart-window="360">6h</button>
+    <button type="button" class="pill" data-chart-window="720">12h</button>
+    <button type="button" class="pill" data-chart-window="1440">24h</button>
   </div>
 
   <div class="charts" id="charts">
     {% for fiat in primary_quotes %}
       <div class="chart-card">
         <div class="chart-head">
-          <div class="chart-title">BTC / {{ fiat }} · 1-minute candles</div>
+          <div class="chart-title">
+            BTC / {{ fiat }} · <span data-fiat-interval="{{ fiat }}">1-minute</span> candles
+          </div>
           <div class="chart-status" data-fiat-status="{{ fiat }}">loading…</div>
         </div>
         <div class="chart-box" data-fiat-chart="{{ fiat }}"></div>
       </div>
     {% endfor %}
+  </div>
+
+  <div id="overview-content">
+    {% include "api/_overview_content.html" %}
   </div>
 
   <table>
@@ -195,10 +218,11 @@
   </table>
 
   <div class="footer">
-    Endpoints: <a href="/api/prices/">/api/prices/</a> ·
-    <a href="/api/current/">/api/current/</a> ·
-    <a href="/api/candles/">/api/candles/</a> ·
-    <a href="/api/health/">/api/health/</a> ·
+    Endpoints: <a href="/api/v1/docs/">/api/v1/docs/</a> ·
+    <a href="/api/v1/prices/">/api/v1/prices/</a> ·
+    <a href="/api/v1/current/">/api/v1/current/</a> ·
+    <a href="/api/v1/candles/">/api/v1/candles/</a> ·
+    <a href="/api/v1/health/">/api/v1/health/</a> ·
     <a href="/admin/">/admin/</a>
   </div>
 
@@ -317,12 +341,57 @@
   <script src="{% static 'api/vendor/lightweight-charts.standalone.production.js' %}"></script>
   <script>
   (function () {
-    const WINDOW_MIN = 120;
+    const DEFAULT_WINDOW_MIN = 360;
+    const STORAGE_KEY = 'pricemon:chartWindowMin';
     const REFRESH_MS = 15000;
+    // Bucket size per window, chosen to keep ~60–360 candles on screen.
+    const INTERVAL_FOR_WINDOW = {
+      60: 1,
+      120: 1,
+      360: 1,
+      720: 5,
+      1440: 5,
+    };
     const fiats = Array.from(
       document.querySelectorAll('[data-fiat-chart]')
     ).map(el => el.dataset.fiatChart);
     if (!fiats.length || typeof LightweightCharts === 'undefined') return;
+
+    const controls = document.getElementById('chart-controls');
+    const pills = controls
+      ? Array.from(controls.querySelectorAll('[data-chart-window]'))
+      : [];
+    const allowed = new Set(pills.map(p => Number(p.dataset.chartWindow)));
+    let windowMin = DEFAULT_WINDOW_MIN;
+    try {
+      const stored = Number(localStorage.getItem(STORAGE_KEY));
+      if (allowed.has(stored)) windowMin = stored;
+    } catch (_) { /* localStorage unavailable */ }
+
+    function intervalFor(w) {
+      return INTERVAL_FOR_WINDOW[w] || 1;
+    }
+    function fmtInterval(m) {
+      return m < 60 ? `${m}m` : `${m / 60}h`;
+    }
+    function fmtIntervalLong(m) {
+      if (m < 60) return `${m}-minute`;
+      const h = m / 60;
+      return h === 1 ? '1-hour' : `${h}-hour`;
+    }
+    function setIntervalLabels(m) {
+      const label = fmtIntervalLong(m);
+      for (const el of document.querySelectorAll('[data-fiat-interval]')) {
+        el.textContent = label;
+      }
+    }
+
+    function setActivePill() {
+      for (const p of pills) {
+        p.classList.toggle('active', Number(p.dataset.chartWindow) === windowMin);
+      }
+    }
+    setActivePill();
 
     const baseChartOpts = {
       layout: {
@@ -372,13 +441,19 @@
     }
 
     async function refresh() {
+      const interval = intervalFor(windowMin);
+      setIntervalLabels(interval);
       const params = new URLSearchParams();
-      params.set('window', String(WINDOW_MIN));
+      params.set('window', String(windowMin));
+      params.set('interval', String(interval));
       for (const f of fiats) params.append('fiat', f);
       try {
-        const res = await fetch(`/api/candles/?${params}`, { cache: 'no-store' });
+        const res = await fetch(`/api/candles/agg/?${params}`, { cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
+        const intResp = data.interval_minutes || interval;
+        setIntervalLabels(intResp);
+        const intLabel = fmtInterval(intResp);
         for (const fiat of fiats) {
           const entry = charts[fiat];
           const bars = (data.series && data.series[fiat]) || [];
@@ -389,7 +464,7 @@
           } else {
             const last = bars[bars.length - 1];
             const ts = new Date(last.time * 1000).toISOString().slice(11, 16);
-            setStatus(fiat, `${bars.length} bars · last ${ts} UTC · ${last.close.toFixed(2)} ${fiat}`, false);
+            setStatus(fiat, `${bars.length} × ${intLabel} bars · last ${ts} UTC · ${last.close.toFixed(2)} ${fiat}`, false);
           }
         }
       } catch (err) {
@@ -397,8 +472,27 @@
       }
     }
 
+    let timer = null;
+    function schedule() {
+      if (timer) clearInterval(timer);
+      timer = setInterval(refresh, REFRESH_MS);
+    }
+
+    for (const p of pills) {
+      p.addEventListener('click', () => {
+        const next = Number(p.dataset.chartWindow);
+        if (!allowed.has(next) || next === windowMin) return;
+        windowMin = next;
+        setActivePill();
+        try { localStorage.setItem(STORAGE_KEY, String(windowMin)); } catch (_) {}
+        for (const fiat of fiats) setStatus(fiat, 'loading…', false);
+        refresh();
+        schedule();
+      });
+    }
+
     refresh();
-    setInterval(refresh, REFRESH_MS);
+    schedule();
   })();
   </script>
 </body>

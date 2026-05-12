@@ -1,4 +1,5 @@
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -10,9 +11,12 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.cache import cache_page
 from django.views.decorators.vary import vary_on_headers
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from api.outliers import OutlierReport, clip_wick, filter_exchange_outliers
 from core.models import Currency, Exchange, HistoricalBtcPrice, MinuteAggregate, TradingPair
 from feeds.current_state import get_many as get_current_many
 
@@ -209,6 +213,17 @@ class WeightedPricesView(APIView):
 
     FIATS = ("USD", "EUR")
 
+    @extend_schema(
+        tags=["prices"],
+        summary="Window-based volume-weighted prices",
+        parameters=[
+            OpenApiParameter("window", OpenApiTypes.INT, description="Minutes back to aggregate. Default 5, clamped to [1, 1440]."),
+            OpenApiParameter("base", OpenApiTypes.STR, many=True, description="Repeatable. Filter by base currency (e.g. BTC). Default: all."),
+            OpenApiParameter("quote", OpenApiTypes.STR, many=True, description="Repeatable. Filter by quote currency (e.g. USD). Default: all."),
+            OpenApiParameter("exchange", OpenApiTypes.STR, many=True, description="Repeatable. Filter by exchange slug. Default: all active."),
+        ],
+        responses=OpenApiTypes.OBJECT,
+    )
     def get(self, request):
         try:
             window = int(request.query_params.get("window", 5))
@@ -229,57 +244,110 @@ class WeightedPricesView(APIView):
         else:
             qs = qs.filter(pair__exchange__is_active=True)
 
-        # quote filter applies only to the raw rollup; the fiat-merged view
-        # still needs stable-quoted rows to compute its USD/EUR contributions.
-        qs_for_raw = qs.filter(pair__quote__code__in=quotes) if quotes else qs
-
         peg_map = _stable_peg_map()
+        merge_quotes = set(self.FIATS) | set(peg_map.keys())
 
-        rolled = (
-            qs_for_raw.values("pair__base__code", "pair__quote__code")
-            .annotate(
-                volume_base=Sum("volume_base"),
-                volume_quote=Sum("volume_quote"),
-                trade_count=Sum("trade_count"),
+        # Pull per-(exchange, base, quote, minute) raw rows so we can drop
+        # outliers before rolling up. The unique key on MinuteAggregate is
+        # (pair, minute_start), so each row here is already a single record.
+        raw_rows = list(
+            qs.values(
+                "pair__exchange__slug",
+                "pair__base__code",
+                "pair__quote__code",
+                "minute_start",
+                "volume_base",
+                "volume_quote",
+                "trade_count",
+                "price_vwap",
             )
-            .order_by("pair__base__code", "pair__quote__code")
         )
+
+        outlier_enabled = getattr(settings, "OUTLIER_FILTER_ENABLED", False)
+        report = OutlierReport()
+        outlier_exchange_pairs: set[tuple[str, str, str]] = set()
+
+        by_minute: dict[tuple[str, str, datetime], list[dict]] = defaultdict(list)
+        for r in raw_rows:
+            by_minute[(r["pair__base__code"], r["pair__quote__code"], r["minute_start"])].append(r)
+
+        kept_rows: list[dict] = []
+        for (base_, quote_, minute), rows in by_minute.items():
+            if outlier_enabled and len(rows) >= 2:
+                mapped = [
+                    {
+                        "exchange": r["pair__exchange__slug"],
+                        "vwap": r["price_vwap"],
+                        "volume_base": r["volume_base"] or Decimal(0),
+                        "_raw": r,
+                    }
+                    for r in rows
+                ]
+                before = {m["exchange"] for m in mapped}
+                kept = filter_exchange_outliers(
+                    mapped,
+                    base=base_, quote=quote_, minute=minute,
+                    max_dev_pct=settings.OUTLIER_EXCHANGE_MAX_DEV_PCT,
+                    report=report,
+                )
+                after = {m["exchange"] for m in kept}
+                for ex in before - after:
+                    outlier_exchange_pairs.add((ex, base_, quote_))
+                kept_rows.extend(m["_raw"] for m in kept)
+            else:
+                kept_rows.extend(rows)
+
+        # Roll up `weighted[]` (honors user quote filter) and `full_rolled`
+        # (always covers merge_quotes for fiat merge) in a single pass.
+        weighted_acc: dict[tuple[str, str], dict] = {}
+        full_rolled_acc: dict[tuple[str, str], dict] = {}
+        for r in kept_rows:
+            base_ = r["pair__base__code"]
+            quote_ = r["pair__quote__code"]
+            vb = r["volume_base"] or Decimal(0)
+            vq = r["volume_quote"] or Decimal(0)
+            tc = r["trade_count"] or 0
+            if not quotes or quote_ in quotes:
+                s = weighted_acc.setdefault((base_, quote_), {"vb": Decimal(0), "vq": Decimal(0), "tc": 0})
+                s["vb"] += vb; s["vq"] += vq; s["tc"] += tc
+            if quote_ in merge_quotes:
+                s = full_rolled_acc.setdefault((base_, quote_), {"vb": Decimal(0), "vq": Decimal(0), "tc": 0})
+                s["vb"] += vb; s["vq"] += vq; s["tc"] += tc
+
         weighted = [
             {
-                "base": row["pair__base__code"],
-                "quote": row["pair__quote__code"],
-                "trade_count": row["trade_count"],
-                "volume_base": str(row["volume_base"] or Decimal(0)),
-                "volume_quote": str(row["volume_quote"] or Decimal(0)),
-                "vwap": _vwap(row["volume_quote"] or Decimal(0), row["volume_base"] or Decimal(0)),
+                "base": base_,
+                "quote": quote_,
+                "trade_count": s["tc"],
+                "volume_base": str(s["vb"]),
+                "volume_quote": str(s["vq"]),
+                "vwap": _vwap(s["vq"], s["vb"]),
             }
-            for row in rolled
+            for (base_, quote_), s in sorted(weighted_acc.items())
         ]
 
-        # Fiat-merged view: pull *all* fiat + stable-quoted rows regardless
-        # of the user's quote filter, so stable contributions still feed
-        # into USD/EUR. Honor base/exchange filters.
-        merge_quotes = set(self.FIATS) | set(peg_map.keys())
-        full_rolled_qs = (
-            qs.filter(pair__quote__code__in=merge_quotes)
-            .values("pair__base__code", "pair__quote__code")
-            .annotate(
-                volume_base=Sum("volume_base"),
-                volume_quote=Sum("volume_quote"),
-                trade_count=Sum("trade_count"),
-            )
-        )
         full_rolled = [
             {
-                "base": r["pair__base__code"],
-                "quote": r["pair__quote__code"],
-                "volume_base": r["volume_base"] or Decimal(0),
-                "volume_quote": r["volume_quote"] or Decimal(0),
-                "trade_count": r["trade_count"] or 0,
+                "base": b,
+                "quote": q,
+                "volume_base": s["vb"],
+                "volume_quote": s["vq"],
+                "trade_count": s["tc"],
             }
-            for r in full_rolled_qs
+            for (b, q), s in full_rolled_acc.items()
         ]
-        stable_rates = _stable_rates_from_window(qs, peg_map)
+        # Stable→fiat rates derived from the same kept rows for consistency.
+        stable_rates: dict[str, dict] = {}
+        for (b, q), s in full_rolled_acc.items():
+            if peg_map.get(b) != q or s["vb"] <= 0:
+                continue
+            stable_rates[b] = {
+                "fiat": q,
+                "rate": s["vq"] / s["vb"],
+                "volume_base": s["vb"],
+                "volume_quote": s["vq"],
+                "trade_count": s["tc"],
+            }
         merged = _merge_into_fiat(full_rolled, stable_rates, peg_map, self.FIATS)
         missing = _missing_rate_stables(full_rolled, stable_rates, peg_map, self.FIATS)
 
@@ -322,33 +390,36 @@ class WeightedPricesView(APIView):
             for stable, info in sorted(stable_rates.items())
         ]
 
-        per_ex = (
-            qs_for_raw.values(
-                "pair__exchange__slug",
-                "pair__base__code",
-                "pair__quote__code",
-            )
-            .annotate(
-                volume_base=Sum("volume_base"),
-                volume_quote=Sum("volume_quote"),
-                trade_count=Sum("trade_count"),
-            )
-            .order_by("pair__exchange__slug", "pair__base__code", "pair__quote__code")
-        )
-        by_exchange = [
-            {
-                "exchange": row["pair__exchange__slug"],
-                "base": row["pair__base__code"],
-                "quote": row["pair__quote__code"],
-                "trade_count": row["trade_count"],
-                "volume_base": str(row["volume_base"] or Decimal(0)),
-                "volume_quote": str(row["volume_quote"] or Decimal(0)),
-                "vwap": _vwap(row["volume_quote"] or Decimal(0), row["volume_base"] or Decimal(0)),
+        # by_exchange[] keeps every exchange's row (operators want to see
+        # the bad print) but rows that were dropped from at least one
+        # minute's consensus aggregate get an additive `is_outlier: true`.
+        by_ex_acc: dict[tuple[str, str, str], dict] = {}
+        for r in raw_rows:
+            quote_ = r["pair__quote__code"]
+            if quotes and quote_ not in quotes:
+                continue
+            base_ = r["pair__base__code"]
+            ex = r["pair__exchange__slug"]
+            s = by_ex_acc.setdefault((ex, base_, quote_), {"vb": Decimal(0), "vq": Decimal(0), "tc": 0})
+            s["vb"] += r["volume_base"] or Decimal(0)
+            s["vq"] += r["volume_quote"] or Decimal(0)
+            s["tc"] += r["trade_count"] or 0
+        by_exchange = []
+        for (ex, base_, quote_), s in sorted(by_ex_acc.items()):
+            row = {
+                "exchange": ex,
+                "base": base_,
+                "quote": quote_,
+                "trade_count": s["tc"],
+                "volume_base": str(s["vb"]),
+                "volume_quote": str(s["vq"]),
+                "vwap": _vwap(s["vq"], s["vb"]),
             }
-            for row in per_ex
-        ]
+            if (ex, base_, quote_) in outlier_exchange_pairs:
+                row["is_outlier"] = True
+            by_exchange.append(row)
 
-        return Response({
+        response_body = {
             "as_of": timezone.now().isoformat(),
             "window_minutes": window,
             "weighted": weighted,
@@ -356,7 +427,10 @@ class WeightedPricesView(APIView):
             "stable_rates": rates_payload,
             "missing_rate_stables": missing,
             "by_exchange": by_exchange,
-        })
+        }
+        if outlier_enabled:
+            response_body["outliers_excluded"] = report.excluded
+        return Response(response_body)
 
 
 def _active_pairs_for_current():
@@ -435,6 +509,16 @@ class CurrentPriceView(APIView):
 
     FIATS = ("USD", "EUR")
 
+    @extend_schema(
+        tags=["prices"],
+        summary="Live (sub-minute) volume-weighted prices",
+        parameters=[
+            OpenApiParameter("base", OpenApiTypes.STR, many=True, description="Repeatable. Filter by base currency. Default: all."),
+            OpenApiParameter("quote", OpenApiTypes.STR, many=True, description="Repeatable. Filter by quote currency. Default: all."),
+            OpenApiParameter("exchange", OpenApiTypes.STR, many=True, description="Repeatable. Filter by exchange slug. Default: all."),
+        ],
+        responses=OpenApiTypes.OBJECT,
+    )
     def get(self, request):
         bases = set(request.query_params.getlist("base"))
         quotes = set(request.query_params.getlist("quote"))
@@ -471,9 +555,55 @@ class CurrentPriceView(APIView):
         rows = _fetch_current_rows(user_pairs)
         merge_rows = _fetch_current_rows(merge_pairs)
 
+        # Per-(base, quote) outlier filtering on live rows. Use last_price as
+        # the per-exchange "vwap" and minute_volume_base as the weight.
+        outlier_enabled = getattr(settings, "OUTLIER_FILTER_ENABLED", False)
+        report = OutlierReport()
+        live_outlier_pairs: set[tuple[str, str, str]] = set()
+        now_iso = timezone.now().isoformat()
+
+        def _filter_live_rows(input_rows: list[dict]) -> list[dict]:
+            if not outlier_enabled:
+                return input_rows
+            by_pair: dict[tuple[str, str], list[dict]] = defaultdict(list)
+            passthrough: list[dict] = []
+            for r in input_rows:
+                if not r.get("live") or not r.get("fresh"):
+                    passthrough.append(r)
+                    continue
+                by_pair[(r["base"], r["quote"])].append(r)
+            kept_all: list[dict] = list(passthrough)
+            for (base_, quote_), group in by_pair.items():
+                if len(group) < 2:
+                    kept_all.extend(group)
+                    continue
+                mapped = [
+                    {
+                        "exchange": r["exchange"],
+                        "vwap": r["last_price"],
+                        "volume_base": r.get("minute_volume_base") or Decimal(0),
+                        "_raw": r,
+                    }
+                    for r in group
+                ]
+                before = {m["exchange"] for m in mapped}
+                kept = filter_exchange_outliers(
+                    mapped, base=base_, quote=quote_, minute=now_iso,
+                    max_dev_pct=settings.OUTLIER_EXCHANGE_MAX_DEV_PCT,
+                    report=report,
+                )
+                after = {m["exchange"] for m in kept}
+                for ex in before - after:
+                    live_outlier_pairs.add((ex, base_, quote_))
+                kept_all.extend(m["_raw"] for m in kept)
+            return kept_all
+
+        rows_filtered = _filter_live_rows(rows)
+        merge_rows_filtered = _filter_live_rows(merge_rows)
+
         # Cross-exchange VWAP per (base, quote) using only live+fresh rows.
         grouped: dict[tuple[str, str], dict] = {}
-        for r in rows:
+        for r in rows_filtered:
             if not r.get("live") or not r.get("fresh"):
                 continue
             key = (r["base"], r["quote"])
@@ -514,10 +644,10 @@ class CurrentPriceView(APIView):
             })
         weighted.sort(key=lambda x: (x["base"], x["quote"]))
 
-        # Build the fiat-merged live view from merge_rows (broader scope).
-        stable_rates_live = _stable_rates_from_live(merge_rows, peg_map)
+        # Build the fiat-merged live view from merge_rows_filtered (broader scope).
+        stable_rates_live = _stable_rates_from_live(merge_rows_filtered, peg_map)
         per_quote_live: dict[tuple[str, str], dict] = {}
-        for r in merge_rows:
+        for r in merge_rows_filtered:
             if not r.get("live") or not r.get("fresh"):
                 continue
             base = r["base"]
@@ -604,7 +734,7 @@ class CurrentPriceView(APIView):
                     "live": False,
                 })
                 continue
-            per_pair.append({
+            entry = {
                 "exchange": r["exchange"],
                 "base": r["base"],
                 "quote": r["quote"],
@@ -620,18 +750,87 @@ class CurrentPriceView(APIView):
                 "minute_vwap": str(r["minute_vwap"]),
                 "minute_min": str(r["minute_min"]),
                 "minute_max": str(r["minute_max"]),
-            })
+            }
+            if (r["exchange"], r["base"], r["quote"]) in live_outlier_pairs:
+                entry["is_outlier"] = True
+            per_pair.append(entry)
         per_pair.sort(key=lambda x: (x["base"], x["quote"], x["exchange"]))
 
-        return Response({
-            "as_of": timezone.now().isoformat(),
+        response_body = {
+            "as_of": now_iso,
             "fresh_window_sec": settings.CURRENT_FRESH_SEC,
             "weighted": weighted,
             "weighted_fiat": weighted_fiat,
             "stable_rates": rates_payload,
             "missing_rate_stables": missing,
             "by_pair": per_pair,
-        })
+        }
+        if outlier_enabled:
+            response_body["outliers_excluded"] = report.excluded
+        return Response(response_body)
+
+
+def _stable_rates_by_minute(
+    stables_for_fiat: list[str],
+    fiat: str,
+    start_dt,
+    end_dt,
+    *,
+    report: OutlierReport | None,
+) -> dict[tuple[str, datetime], Decimal]:
+    """Per-(stable, minute) stable→fiat rate, with outlier-exchange rows
+    dropped from the cross-exchange aggregation when filtering is enabled."""
+    rates: dict[tuple[str, datetime], Decimal] = {}
+    if not stables_for_fiat:
+        return rates
+    rate_rows = list(
+        MinuteAggregate.objects
+        .filter(
+            pair__base__code__in=stables_for_fiat,
+            pair__quote__code=fiat,
+            pair__exchange__is_active=True,
+            minute_start__gte=start_dt,
+            minute_start__lt=end_dt,
+        )
+        .values(
+            "pair__exchange__slug",
+            "pair__base__code",
+            "minute_start",
+            "volume_base",
+            "volume_quote",
+            "price_vwap",
+        )
+    )
+    enabled = report is not None and getattr(settings, "OUTLIER_FILTER_ENABLED", False)
+    groups: dict[tuple[str, datetime], list[dict]] = defaultdict(list)
+    for r in rate_rows:
+        groups[(r["pair__base__code"], r["minute_start"])].append(r)
+    for (stable, minute), group in groups.items():
+        rows = group
+        if enabled and len(rows) >= 2:
+            mapped = [
+                {
+                    "exchange": r["pair__exchange__slug"],
+                    "vwap": r["price_vwap"],
+                    "volume_base": r["volume_base"] or Decimal(0),
+                    "_raw": r,
+                }
+                for r in rows
+            ]
+            kept = filter_exchange_outliers(
+                mapped, base=stable, quote=fiat, minute=minute,
+                max_dev_pct=settings.OUTLIER_EXCHANGE_MAX_DEV_PCT,
+                report=report,
+            )
+            rows = [m["_raw"] for m in kept]
+        vb_sum = Decimal(0)
+        vq_sum = Decimal(0)
+        for r in rows:
+            vb_sum += r["volume_base"] or Decimal(0)
+            vq_sum += r["volume_quote"] or Decimal(0)
+        if vb_sum > 0:
+            rates[(stable, minute)] = vq_sum / vb_sum
+    return rates
 
 
 def _merged_minute_candles(
@@ -640,6 +839,8 @@ def _merged_minute_candles(
     base: str,
     fiat: str,
     peg_map: dict[str, str],
+    *,
+    report: OutlierReport | None = None,
 ) -> list[dict]:
     """Per-minute OHLC for (base, fiat) merged across exchanges and stables.
 
@@ -650,8 +851,8 @@ def _merged_minute_candles(
     stable trades still resolves a rate.
 
     The merged candle is:
-      high  = max(price_max contributors × rate)
-      low   = min(price_min contributors × rate)
+      high  = max(clipped price_max contributors × rate)
+      low   = min(clipped price_min contributors × rate)
       vwap  = sum(volume_quote × rate) / sum(volume_base)
       close = vwap
       open  = previous minute's vwap (first minute opens at its own vwap)
@@ -659,29 +860,9 @@ def _merged_minute_candles(
     stables_for_fiat = [s for s, f in peg_map.items() if f == fiat]
     merge_quotes = {fiat, *stables_for_fiat}
 
-    # Stable→fiat rate per minute. Aggregate across exchanges so each minute
-    # has one canonical rate per stablecoin.
-    rates_by_minute: dict[tuple[str, datetime], Decimal] = {}
-    if stables_for_fiat:
-        rate_rows = (
-            MinuteAggregate.objects
-            .filter(
-                pair__base__code__in=stables_for_fiat,
-                pair__quote__code=fiat,
-                pair__exchange__is_active=True,
-                minute_start__gte=start_dt,
-                minute_start__lt=end_dt,
-            )
-            .values("pair__base__code", "minute_start")
-            .annotate(volume_base=Sum("volume_base"), volume_quote=Sum("volume_quote"))
-        )
-        for r in rate_rows:
-            vb = r["volume_base"] or Decimal(0)
-            if not vb:
-                continue
-            rates_by_minute[(r["pair__base__code"], r["minute_start"])] = (
-                (r["volume_quote"] or Decimal(0)) / vb
-            )
+    rates_by_minute = _stable_rates_by_minute(
+        stables_for_fiat, fiat, start_dt, end_dt, report=report,
+    )
 
     def _rate_for(stable: str, minute: datetime) -> Decimal | None:
         rate = rates_by_minute.get((stable, minute))
@@ -696,8 +877,9 @@ def _merged_minute_candles(
                 best = (m, v)
         return best[1] if best else None
 
-    # Contributors: per-(quote, minute) aggregated across exchanges.
-    contrib_rows = (
+    # Pull per-(exchange, quote, minute) rows so we can filter outlier
+    # exchanges and clip per-exchange wicks before merging.
+    contrib_rows = list(
         MinuteAggregate.objects
         .filter(
             pair__base__code=base,
@@ -706,17 +888,48 @@ def _merged_minute_candles(
             minute_start__gte=start_dt,
             minute_start__lt=end_dt,
         )
-        .values("pair__quote__code", "minute_start")
-        .annotate(
-            volume_base=Sum("volume_base"),
-            volume_quote=Sum("volume_quote"),
-            price_min=Min("price_min"),
-            price_max=Max("price_max"),
+        .values(
+            "pair__exchange__slug",
+            "pair__quote__code",
+            "minute_start",
+            "volume_base",
+            "volume_quote",
+            "price_min",
+            "price_max",
+            "price_vwap",
         )
     )
 
-    merged: dict[datetime, dict] = {}
+    enabled = report is not None and getattr(settings, "OUTLIER_FILTER_ENABLED", False)
+    wick_max_pct = settings.OUTLIER_WICK_MAX_PCT if enabled else None
+
+    groups: dict[tuple[str, datetime], list[dict]] = defaultdict(list)
     for r in contrib_rows:
+        groups[(r["pair__quote__code"], r["minute_start"])].append(r)
+
+    kept_contribs: list[dict] = []
+    for (quote, minute), group in groups.items():
+        if enabled and len(group) >= 2:
+            mapped = [
+                {
+                    "exchange": r["pair__exchange__slug"],
+                    "vwap": r["price_vwap"],
+                    "volume_base": r["volume_base"] or Decimal(0),
+                    "_raw": r,
+                }
+                for r in group
+            ]
+            kept = filter_exchange_outliers(
+                mapped, base=base, quote=quote, minute=minute,
+                max_dev_pct=settings.OUTLIER_EXCHANGE_MAX_DEV_PCT,
+                report=report,
+            )
+            kept_contribs.extend(m["_raw"] for m in kept)
+        else:
+            kept_contribs.extend(group)
+
+    merged: dict[datetime, dict] = {}
+    for r in kept_contribs:
         minute = r["minute_start"]
         quote = r["pair__quote__code"]
         if quote == fiat:
@@ -728,9 +941,13 @@ def _merged_minute_candles(
         vb = r["volume_base"] or Decimal(0)
         if not vb:
             continue
+        pmin = r["price_min"]
+        pmax = r["price_max"]
+        if wick_max_pct is not None:
+            pmin, pmax = clip_wick(pmin, pmax, r["price_vwap"], max_pct=wick_max_pct, report=report)
         vq = (r["volume_quote"] or Decimal(0)) * rate
-        hi = (r["price_max"] or Decimal(0)) * rate
-        lo = (r["price_min"] or Decimal(0)) * rate
+        hi = (pmax or Decimal(0)) * rate
+        lo = (pmin or Decimal(0)) * rate
         slot = merged.setdefault(minute, {
             "volume_base": Decimal(0),
             "volume_quote_fiat": Decimal(0),
@@ -771,6 +988,8 @@ def _merged_minute_rows(
     base: str,
     fiat: str,
     peg_map: dict[str, str],
+    *,
+    report: OutlierReport | None = None,
 ) -> list[dict]:
     """Per-minute rich rows for (base, fiat) merged across exchanges and stables.
 
@@ -781,27 +1000,9 @@ def _merged_minute_rows(
     stables_for_fiat = [s for s, f in peg_map.items() if f == fiat]
     merge_quotes = {fiat, *stables_for_fiat}
 
-    rates_by_minute: dict[tuple[str, datetime], Decimal] = {}
-    if stables_for_fiat:
-        rate_rows = (
-            MinuteAggregate.objects
-            .filter(
-                pair__base__code__in=stables_for_fiat,
-                pair__quote__code=fiat,
-                pair__exchange__is_active=True,
-                minute_start__gte=start_dt,
-                minute_start__lt=end_dt,
-            )
-            .values("pair__base__code", "minute_start")
-            .annotate(volume_base=Sum("volume_base"), volume_quote=Sum("volume_quote"))
-        )
-        for r in rate_rows:
-            vb = r["volume_base"] or Decimal(0)
-            if not vb:
-                continue
-            rates_by_minute[(r["pair__base__code"], r["minute_start"])] = (
-                (r["volume_quote"] or Decimal(0)) / vb
-            )
+    rates_by_minute = _stable_rates_by_minute(
+        stables_for_fiat, fiat, start_dt, end_dt, report=report,
+    )
 
     def _rate_for(stable: str, minute: datetime) -> Decimal | None:
         rate = rates_by_minute.get((stable, minute))
@@ -815,7 +1016,7 @@ def _merged_minute_rows(
                 best = (m, v)
         return best[1] if best else None
 
-    contrib_rows = (
+    contrib_rows = list(
         MinuteAggregate.objects
         .filter(
             pair__base__code=base,
@@ -824,18 +1025,49 @@ def _merged_minute_rows(
             minute_start__gte=start_dt,
             minute_start__lt=end_dt,
         )
-        .values("pair__quote__code", "minute_start")
-        .annotate(
-            volume_base=Sum("volume_base"),
-            volume_quote=Sum("volume_quote"),
-            price_min=Min("price_min"),
-            price_max=Max("price_max"),
-            trades=Sum("trade_count"),
+        .values(
+            "pair__exchange__slug",
+            "pair__quote__code",
+            "minute_start",
+            "volume_base",
+            "volume_quote",
+            "price_min",
+            "price_max",
+            "price_vwap",
+            "trade_count",
         )
     )
 
-    merged: dict[datetime, dict] = {}
+    enabled = report is not None and getattr(settings, "OUTLIER_FILTER_ENABLED", False)
+    wick_max_pct = settings.OUTLIER_WICK_MAX_PCT if enabled else None
+
+    groups: dict[tuple[str, datetime], list[dict]] = defaultdict(list)
     for r in contrib_rows:
+        groups[(r["pair__quote__code"], r["minute_start"])].append(r)
+
+    kept_contribs: list[dict] = []
+    for (quote, minute), group in groups.items():
+        if enabled and len(group) >= 2:
+            mapped = [
+                {
+                    "exchange": r["pair__exchange__slug"],
+                    "vwap": r["price_vwap"],
+                    "volume_base": r["volume_base"] or Decimal(0),
+                    "_raw": r,
+                }
+                for r in group
+            ]
+            kept = filter_exchange_outliers(
+                mapped, base=base, quote=quote, minute=minute,
+                max_dev_pct=settings.OUTLIER_EXCHANGE_MAX_DEV_PCT,
+                report=report,
+            )
+            kept_contribs.extend(m["_raw"] for m in kept)
+        else:
+            kept_contribs.extend(group)
+
+    merged: dict[datetime, dict] = {}
+    for r in kept_contribs:
         minute = r["minute_start"]
         quote = r["pair__quote__code"]
         rate = Decimal(1) if quote == fiat else _rate_for(quote, minute)
@@ -844,9 +1076,13 @@ def _merged_minute_rows(
         vb = r["volume_base"] or Decimal(0)
         if not vb:
             continue
+        pmin = r["price_min"]
+        pmax = r["price_max"]
+        if wick_max_pct is not None:
+            pmin, pmax = clip_wick(pmin, pmax, r["price_vwap"], max_pct=wick_max_pct, report=report)
         vq = (r["volume_quote"] or Decimal(0)) * rate
-        hi = (r["price_max"] or Decimal(0)) * rate
-        lo = (r["price_min"] or Decimal(0)) * rate
+        hi = (pmax or Decimal(0)) * rate
+        lo = (pmin or Decimal(0)) * rate
         slot = merged.setdefault(minute, {
             "volume_base": Decimal(0),
             "volume_quote_fiat": Decimal(0),
@@ -857,7 +1093,7 @@ def _merged_minute_rows(
         })
         slot["volume_base"] += vb
         slot["volume_quote_fiat"] += vq
-        slot["trades"] += r["trades"] or 0
+        slot["trades"] += r["trade_count"] or 0
         slot["quotes"].add(quote)
         if slot["high"] is None or hi > slot["high"]:
             slot["high"] = hi
@@ -941,6 +1177,16 @@ class CandlesView(APIView):
 
     DEFAULT_FIATS = ("USD", "EUR")
 
+    @extend_schema(
+        tags=["candles"],
+        summary="Per-minute OHLC candles",
+        parameters=[
+            OpenApiParameter("window", OpenApiTypes.INT, description="Minutes back. Default 120, clamped to [1, 1440]."),
+            OpenApiParameter("base", OpenApiTypes.STR, description='Base currency code. Default "BTC".'),
+            OpenApiParameter("fiat", OpenApiTypes.STR, many=True, description="Repeatable. Default: USD and EUR."),
+        ],
+        responses=OpenApiTypes.OBJECT,
+    )
     def get(self, request):
         try:
             window = int(request.query_params.get("window", 120))
@@ -956,14 +1202,118 @@ class CandlesView(APIView):
         start_dt = end_dt - timedelta(minutes=window)
         peg_map = _stable_peg_map()
 
+        outlier_enabled = getattr(settings, "OUTLIER_FILTER_ENABLED", False)
+        report = OutlierReport() if outlier_enabled else None
         series = {
-            fiat: _merged_minute_candles(start_dt, end_dt, base, fiat, peg_map)
+            fiat: _merged_minute_candles(start_dt, end_dt, base, fiat, peg_map, report=report)
+            for fiat in fiats
+        }
+        body = {
+            "as_of": now.isoformat(),
+            "base": base,
+            "window_minutes": window,
+            "series": series,
+        }
+        if report is not None:
+            body["outliers_excluded"] = len(report.excluded)
+            body["wicks_clipped"] = report.wicks_clipped
+        return Response(body)
+
+
+def _resample_candles(rows: list[dict], interval_min: int) -> list[dict]:
+    """Aggregate 1-minute OHLC rows into ``interval_min``-minute buckets.
+
+    Buckets align to epoch second 0 mod (interval_min * 60), so a 5-minute
+    series snaps to :00 / :05 / :10 / … in UTC.
+    """
+    if interval_min <= 1 or not rows:
+        return rows
+    step = interval_min * 60
+    out: list[dict] = []
+    bucket: dict | None = None
+    for r in rows:
+        b = (r["time"] // step) * step
+        if bucket is None or b != bucket["time"]:
+            if bucket is not None:
+                out.append(bucket)
+            bucket = {
+                "time": b,
+                "open": r["open"],
+                "high": r["high"],
+                "low": r["low"],
+                "close": r["close"],
+            }
+        else:
+            if r["high"] > bucket["high"]:
+                bucket["high"] = r["high"]
+            if r["low"] < bucket["low"]:
+                bucket["low"] = r["low"]
+            bucket["close"] = r["close"]
+    if bucket is not None:
+        out.append(bucket)
+    return out
+
+
+@method_decorator(cache_page(settings.API_CACHE_TTL_CANDLES), name="dispatch")
+@method_decorator(vary_on_headers("Accept"), name="dispatch")
+class CandlesAggView(APIView):
+    """Aggregated OHLC candles for ``base`` against each requested fiat.
+
+    Like ``/api/candles/`` but with an ``interval`` parameter that buckets the
+    underlying per-minute merged series into N-minute candles aligned to UTC.
+
+    Query params:
+        window    int minutes back, default 360, clamped to [1, 1440].
+        base      base currency code, default "BTC".
+        fiat      repeatable; defaults to USD and EUR.
+        interval  int bucket size in minutes, default 1, clamped to [1, window].
+    """
+
+    DEFAULT_FIATS = ("USD", "EUR")
+
+    @extend_schema(
+        tags=["candles"],
+        summary="Resampled OHLC candles",
+        parameters=[
+            OpenApiParameter("window", OpenApiTypes.INT, description="Minutes back. Default 360, clamped to [1, 1440]."),
+            OpenApiParameter("base", OpenApiTypes.STR, description='Base currency code. Default "BTC".'),
+            OpenApiParameter("fiat", OpenApiTypes.STR, many=True, description="Repeatable. Default: USD and EUR."),
+            OpenApiParameter("interval", OpenApiTypes.INT, description="Bucket size in minutes. Default 1, clamped to [1, window]. Buckets align to epoch second 0."),
+        ],
+        responses=OpenApiTypes.OBJECT,
+    )
+    def get(self, request):
+        try:
+            window = int(request.query_params.get("window", 360))
+        except ValueError:
+            return Response({"detail": "window must be an integer"}, status=400)
+        window = max(1, min(window, 1440))
+        try:
+            interval = int(request.query_params.get("interval", 1))
+        except ValueError:
+            return Response({"detail": "interval must be an integer"}, status=400)
+        interval = max(1, min(interval, window))
+
+        base = request.query_params.get("base", "BTC")
+        fiats = tuple(request.query_params.getlist("fiat")) or self.DEFAULT_FIATS
+
+        now = timezone.now()
+        end_dt = now.replace(second=0, microsecond=0)
+        start_dt = end_dt - timedelta(minutes=window)
+        peg_map = _stable_peg_map()
+
+        series = {
+            fiat: _resample_candles(
+                _merged_minute_candles(start_dt, end_dt, base, fiat, peg_map),
+                interval,
+            )
             for fiat in fiats
         }
         return Response({
             "as_of": now.isoformat(),
             "base": base,
             "window_minutes": window,
+            "interval_minutes": interval,
             "series": series,
         })
 
@@ -971,6 +1321,7 @@ class CandlesView(APIView):
 class HealthView(APIView):
     """Liveness probe. Returns the most recent minute aggregate timestamp."""
 
+    @extend_schema(tags=["ops"], summary="Liveness probe", responses=OpenApiTypes.OBJECT)
     def get(self, request):
         latest = (
             MinuteAggregate.objects.order_by("-minute_start").values("minute_start").first()

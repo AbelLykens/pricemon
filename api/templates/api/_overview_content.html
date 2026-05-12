@@ -24,7 +24,7 @@
         <span><span class="live-dot"></span>BTC / {{ fiat }} · now
         {% if slot.components|length > 1 %}<span class="merge-tag">merged</span>{% endif %}
         </span>
-        <a class="json-link" href="/api/current/?base=BTC&amp;quote={{ fiat }}">json</a>
+        <a class="json-link" href="/api/v1/current/?base=BTC&amp;quote={{ fiat }}">json</a>
       </div>
       {% if slot.price %}
         <div class="price live">{{ slot.price|floatformat:2 }} {{ fiat }}</div>
@@ -45,7 +45,7 @@
       <div class="card">
         <div class="label">
           <span><span class="live-dot"></span>BTC / {{ quote }} · now</span>
-          <a class="json-link" href="/api/current/?base=BTC&amp;quote={{ quote }}">json</a>
+          <a class="json-link" href="/api/v1/current/?base=BTC&amp;quote={{ quote }}">json</a>
         </div>
         {% if slot.price %}
           <div class="price live">{{ slot.price|floatformat:2 }} {{ quote }}</div>
@@ -67,7 +67,7 @@
         <span>BTC / {{ fiat }} VWAP · last {{ short_window }} min
         {% if info.components|length > 1 %}<span class="merge-tag">merged</span>{% endif %}
         </span>
-        <a class="json-link" href="/api/prices/?base=BTC&amp;quote={{ fiat }}&amp;window={{ short_window }}">json</a>
+        <a class="json-link" href="/api/v1/prices/?base=BTC&amp;quote={{ fiat }}&amp;window={{ short_window }}">json</a>
       </div>
       {% if info.vwap %}
         <div class="price">{{ info.vwap|floatformat:2 }} {{ fiat }}</div>
@@ -91,7 +91,7 @@
       <div class="card">
         <div class="label">
           <span>BTC / {{ quote }} VWAP · last {{ short_window }} min</span>
-          <a class="json-link" href="/api/prices/?base=BTC&amp;quote={{ quote }}&amp;window={{ short_window }}">json</a>
+          <a class="json-link" href="/api/v1/prices/?base=BTC&amp;quote={{ quote }}&amp;window={{ short_window }}">json</a>
         </div>
         {% if info.vwap %}
           <div class="price">{{ info.vwap|floatformat:2 }} {{ quote }}</div>

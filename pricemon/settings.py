@@ -1,6 +1,7 @@
 """Django settings for pricemon."""
 
 import os
+from decimal import Decimal
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,6 +31,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "drf_spectacular",
     "core",
     "feeds",
     "api",
@@ -103,6 +105,32 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.BrowsableAPIRenderer",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Pricemon API",
+    "DESCRIPTION": (
+        "Volume-weighted crypto prices aggregated across exchange WebSocket trade feeds. "
+        "Endpoints return per-minute aggregates, live (sub-minute) state, and OHLC candles, "
+        "with stablecoin-quoted volume merged into the underlying fiat using same-window rates.\n\n"
+        "[← Back to overview](/)"
+    ),
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    # Only document the canonical /api/v1/ tree; the /api/ alias is omitted from the spec.
+    "SCHEMA_PATH_PREFIX": r"/api/v1",
+    "PREPROCESSING_HOOKS": ["api.schema_hooks.keep_v1_only"],
+    "SWAGGER_UI_SETTINGS": {
+        "deepLinking": True,
+        "persistAuthorization": False,
+        "displayOperationId": False,
+    },
+    "TAGS": [
+        {"name": "prices", "description": "Window-based and live volume-weighted prices."},
+        {"name": "candles", "description": "Per-minute OHLC, optionally bucketed."},
+        {"name": "ops", "description": "Health and meta endpoints."},
+    ],
 }
 
 
@@ -149,3 +177,13 @@ CURRENT_PUBLISH_MIN_INTERVAL_SEC = float(
 )
 # A current-state entry is considered live if updated within this window.
 CURRENT_FRESH_SEC = int(_env("CURRENT_FRESH_SEC", "10"))
+
+# Read-time outlier filtering. Non-destructive: stored data is untouched,
+# filters apply only when views aggregate per-(exchange, minute) rows.
+OUTLIER_FILTER_ENABLED = _env("OUTLIER_FILTER_ENABLED", "1") == "1"
+# Drop an exchange's row from a (base, quote, minute) group if its vwap is
+# more than this many percent from the volume-weighted cross-exchange median.
+OUTLIER_EXCHANGE_MAX_DEV_PCT = Decimal(_env("OUTLIER_EXCHANGE_MAX_DEV_PCT", "0.5"))
+# Clip per-exchange price_min/price_max to vwap ± this many percent before
+# they feed into merged OHLC wicks.
+OUTLIER_WICK_MAX_PCT = Decimal(_env("OUTLIER_WICK_MAX_PCT", "2.0"))

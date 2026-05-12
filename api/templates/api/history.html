@@ -58,7 +58,8 @@
     (USDT, USDC, …) merged into {{ fiat }} using each minute's stable→fiat VWAP.
     {{ start_dt|date:"Y-m-d H:i" }} → {{ end_dt|date:"Y-m-d H:i" }} UTC
     · <a href="/">overview</a>
-    · <a href="/api/candles/?window={{ window }}&base={{ base }}&fiat={{ fiat }}">candles JSON</a>
+    · <a href="/api/v1/docs/" title="Swagger UI">API docs</a>
+    · <a href="/api/v1/candles/?window={{ window }}&base={{ base }}&fiat={{ fiat }}">candles JSON</a>
   </div>
 
   <div class="controls">
@@ -175,8 +176,9 @@
 
   <div class="footer">
     <a href="/">/</a> ·
-    <a href="/api/current/">/api/current/</a> ·
-    <a href="/api/prices/?window={{ window }}">/api/prices/</a> ·
+    <a href="/api/v1/docs/">/api/v1/docs/</a> ·
+    <a href="/api/v1/current/">/api/v1/current/</a> ·
+    <a href="/api/v1/prices/?window={{ window }}">/api/v1/prices/</a> ·
     <a href="/admin/">/admin/</a>
   </div>
 </body>
