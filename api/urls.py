@@ -8,6 +8,7 @@ from .views import (
     HistoryView,
     InternalAggregatesView,
     OverviewView,
+    SummaryView,
     WeightedPricesView,
 )
 
@@ -24,3 +25,5 @@ urlpatterns = [
 # Mounted at the project root in pricemon/urls.py
 overview_url = path("", OverviewView.as_view(), name="overview")
 history_url = path("history/", HistoryView.as_view(), name="history")
+# Compatibility endpoint for the cheeserobot.org app — path is locked.
+summary_json_url = path("price/summary.json", SummaryView.as_view(), name="summary-json")

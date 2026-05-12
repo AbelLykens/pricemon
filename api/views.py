@@ -1,10 +1,14 @@
+import json
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
+from urllib.request import Request, urlopen
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import Max, Min, Sum
+from django.http import HttpResponse
 from django.shortcuts import render
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -1866,3 +1870,217 @@ class HistoryView(View):
             "has_rows": bool(rows),
         }
         return render(request, self.template_name, ctx)
+
+
+# --- /price/summary.json -----------------------------------------------------
+# Compatibility endpoint inherited from cheeserobot.org/price/summary.json so
+# the existing CheeseRobot app can repoint to pricemon without changes.
+#
+# Wire shape is locked: see the handoff doc for field types. In particular
+# price.* values are strings (price strings have 4 decimal places), histogram
+# entries use integer prices, and latest_block is proxied verbatim from
+# cheeserobot.org/block.json (blocks[0]).
+
+_SUMMARY_CACHE_TTL_HIST = 600   # 10 min — histograms are expensive
+_SUMMARY_CACHE_TTL_BLOCK = 60   # how often we ask upstream for a new block
+_SUMMARY_CACHE_TTL_BLOCK_RETRY = 10  # back off briefly when upstream is failing
+_SUMMARY_CACHE_TTL_BLOCK_LKG = 6 * 60 * 60  # last-known-good block we fall back to
+_SUMMARY_CACHE_MISS = object()
+_CHEESEROBOT_BLOCK_URL = "https://cheeserobot.org/block.json"
+
+
+def _format_summary_iso_ms(dt: datetime) -> str:
+    """ISO 8601 UTC with millisecond precision and a trailing Z."""
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def _live_btc_fiat_prices(peg_map: dict[str, str]) -> dict[str, Decimal]:
+    """Volume-weighted BTC price in USD/EUR from the live current-state cache."""
+    active_pairs = _active_pairs_for_current()
+    current_rows = _fetch_current_rows(active_pairs)
+    stable_rates_live = _stable_rates_from_live(current_rows, peg_map)
+
+    per_quote: dict[str, dict] = {}
+    for r in current_rows:
+        if not r.get("live") or not r.get("fresh"):
+            continue
+        if r["base"] != "BTC":
+            continue
+        slot = per_quote.setdefault(r["quote"], {
+            "vb": Decimal(0), "vq": Decimal(0),
+            "sum_wp": Decimal(0), "sum_w": Decimal(0),
+        })
+        slot["vb"] += r["minute_volume_base"]
+        slot["vq"] += r["minute_volume_quote"]
+        w = r["minute_volume_base"] if r["minute_volume_base"] > 0 else Decimal(1)
+        slot["sum_wp"] += r["last_price"] * w
+        slot["sum_w"] += w
+
+    merge_input = []
+    for q, s in per_quote.items():
+        vb, vq = s["vb"], s["vq"]
+        if vb == 0 and s["sum_w"] > 0:
+            vb, vq = s["sum_w"], s["sum_wp"]
+        merge_input.append({
+            "base": "BTC", "quote": q,
+            "volume_base": vb, "volume_quote": vq, "trade_count": 0,
+        })
+
+    merged = _merge_into_fiat(merge_input, stable_rates_live, peg_map, ("USD", "EUR"))
+    out: dict[str, Decimal] = {}
+    for (base, fiat), b in merged.items():
+        if base != "BTC" or not b["volume_base"]:
+            continue
+        out[fiat] = b["volume_quote_fiat"] / b["volume_base"]
+    return out
+
+
+def _fallback_btc_fiat_prices(peg_map: dict[str, str]) -> dict[str, Decimal]:
+    """Latest per-minute merged BTC vwap per fiat, when live cache is empty."""
+    now = timezone.now()
+    end_dt = now.replace(second=0, microsecond=0)
+    start_dt = end_dt - timedelta(minutes=15)
+    out: dict[str, Decimal] = {}
+    for fiat in ("USD", "EUR"):
+        rows = _merged_minute_rows(start_dt, end_dt, "BTC", fiat, peg_map)
+        if rows:
+            out[fiat] = rows[-1]["close"]
+    return out
+
+
+def _build_summary_histogram(
+    window_hours: int,
+    bucket_sec: int,
+    peg_map: dict[str, str],
+) -> list[dict]:
+    """Bucketed BTC USD/EUR price means over the last ``window_hours``.
+
+    Each entry: ``{"when_unix": int, "price_usd": int|None, "price_eur": int|None}``.
+    Buckets with no samples (in either currency) are omitted entirely.
+    """
+    now = timezone.now()
+    end_dt = now.replace(second=0, microsecond=0)
+    start_dt = end_dt - timedelta(hours=window_hours)
+
+    by_bucket: dict[int, dict] = {}
+    for fiat, key_sum, key_n in (
+        ("USD", "usd_sum", "usd_n"),
+        ("EUR", "eur_sum", "eur_n"),
+    ):
+        rows = _merged_minute_rows(start_dt, end_dt, "BTC", fiat, peg_map)
+        for r in rows:
+            ts = int(r["minute"].timestamp())
+            b = (ts // bucket_sec) * bucket_sec
+            slot = by_bucket.setdefault(b, {
+                "usd_sum": Decimal(0), "usd_n": 0,
+                "eur_sum": Decimal(0), "eur_n": 0,
+            })
+            slot[key_sum] += r["close"]
+            slot[key_n] += 1
+
+    out: list[dict] = []
+    for b in sorted(by_bucket):
+        slot = by_bucket[b]
+        if not slot["usd_n"] and not slot["eur_n"]:
+            continue
+        out.append({
+            "when_unix": b,
+            "price_usd": int((slot["usd_sum"] / slot["usd_n"]).to_integral_value()) if slot["usd_n"] else None,
+            "price_eur": int((slot["eur_sum"] / slot["eur_n"]).to_integral_value()) if slot["eur_n"] else None,
+        })
+    return out
+
+
+def _histogram_cached(cache_key: str, window_hours: int, bucket_sec: int, peg_map) -> list[dict]:
+    hit = cache.get(cache_key, _SUMMARY_CACHE_MISS)
+    if hit is not _SUMMARY_CACHE_MISS:
+        return hit
+    rows = _build_summary_histogram(window_hours, bucket_sec, peg_map)
+    cache.set(cache_key, rows, _SUMMARY_CACHE_TTL_HIST)
+    return rows
+
+
+def _latest_block_cached() -> dict | None:
+    """Latest BTC block proxied from cheeserobot.org/block.json.
+
+    Two-tier cache: a short "fresh" key throttles upstream fetches to ~1/minute,
+    and a long "last-known-good" key keeps the most recent successful block
+    around as a fallback when upstream is briefly unavailable. On failure we
+    return the LKG and back off retries for a few seconds.
+    """
+    hit = cache.get("summary:latest_block:fresh", _SUMMARY_CACHE_MISS)
+    if hit is not _SUMMARY_CACHE_MISS:
+        return hit
+
+    block: dict | None = None
+    try:
+        req = Request(_CHEESEROBOT_BLOCK_URL, headers={"User-Agent": "pricemon-summary/1"})
+        with urlopen(req, timeout=3.0) as resp:
+            data = json.load(resp)
+        blocks = data.get("blocks") or []
+        if blocks:
+            b = blocks[0]
+            block = {
+                "height": b.get("height"),
+                "hash": b.get("hash"),
+                "time": b.get("time"),
+                "nTx": b.get("nTx"),
+                "size": b.get("size"),
+                "miner_name": b.get("miner_name"),
+            }
+    except Exception:
+        block = None
+
+    if block is not None:
+        cache.set("summary:latest_block:fresh", block, _SUMMARY_CACHE_TTL_BLOCK)
+        cache.set("summary:latest_block:lkg", block, _SUMMARY_CACHE_TTL_BLOCK_LKG)
+        return block
+
+    lkg = cache.get("summary:latest_block:lkg")
+    # Back off retries: don't hammer upstream on every request while it's down,
+    # but recover within seconds once it comes back.
+    cache.set("summary:latest_block:fresh", lkg, _SUMMARY_CACHE_TTL_BLOCK_RETRY)
+    return lkg
+
+
+class SummaryView(View):
+    """``/price/summary.json`` — single-roundtrip payload for the CheeseRobot app.
+
+    Returns current BTC price (USD/EUR) plus a 24h hourly histogram, a 7d
+    4-hour histogram, and the latest Bitcoin block (proxied from cheeserobot.org).
+    Public, unauthenticated, CORS-permissive. Wire shape is the inherited
+    cheeserobot.org contract — do not change field names/types.
+    """
+
+    def get(self, request):
+        peg_map = _stable_peg_map()
+        now = timezone.now()
+
+        prices = _live_btc_fiat_prices(peg_map)
+        if "USD" not in prices or "EUR" not in prices:
+            fb = _fallback_btc_fiat_prices(peg_map)
+            for k in ("USD", "EUR"):
+                prices.setdefault(k, fb.get(k))
+
+        when_unix = int(now.timestamp())
+        price_block = {
+            "when": _format_summary_iso_ms(now),
+            "price_usd": f"{prices['USD']:.4f}" if prices.get("USD") is not None else None,
+            "price_eur": f"{prices['EUR']:.4f}" if prices.get("EUR") is not None else None,
+            "source": "pricemon-weighted",
+            "when_unix": str(when_unix),
+        }
+
+        body = {
+            "price": price_block,
+            "hist_1d": _histogram_cached("summary:hist_1d", 24, 3600, peg_map),
+            "hist_7d": _histogram_cached("summary:hist_7d", 24 * 7, 14400, peg_map),
+            "latest_block": _latest_block_cached(),
+        }
+
+        resp = HttpResponse(
+            json.dumps(body),
+            content_type="application/json",
+        )
+        resp["Access-Control-Allow-Origin"] = "*"
+        return resp

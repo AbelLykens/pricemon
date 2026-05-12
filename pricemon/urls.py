@@ -6,11 +6,12 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
-from api.urls import history_url, overview_url
+from api.urls import history_url, overview_url, summary_json_url
 
 urlpatterns = [
     overview_url,
     history_url,
+    summary_json_url,
     path("admin/", admin.site.urls),
     # OpenAPI schema + interactive docs. Live under /api/v1/ only — not aliased.
     path("api/v1/schema/", SpectacularAPIView.as_view(), name="schema"),
