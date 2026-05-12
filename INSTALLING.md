@@ -138,12 +138,22 @@ ls -l /run/pricemon/gunicorn.sock            # should exist, owned by pricemon
 
 ## 9. nginx
 
+The gunicorn socket is created at `/run/pricemon/gunicorn.sock` as
+`srw-rw---- pricemon:pricemon` (the unit sets `--umask 0117`), so nginx
+needs to be in the `pricemon` group to reach it. Without this you get
+`502 Bad Gateway` with `connect() to unix:/run/pricemon/gunicorn.sock
+failed (13: Permission denied)` in `/var/log/nginx/pricemon-error.log`.
+
 ```bash
+usermod -aG pricemon www-data
 install -m 0644 /opt/pricemon/deploy/nginx/pricemon.conf /etc/nginx/sites-available/pricemon.conf
 ln -sf /etc/nginx/sites-available/pricemon.conf /etc/nginx/sites-enabled/pricemon.conf
 rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl reload nginx
+nginx -t && systemctl restart nginx
 ```
+
+`systemctl restart` (not `reload`) is required the first time so the
+nginx worker processes pick up the new supplementary group.
 
 The shipped config terminates plain HTTP on port 80 with `server_name _;` —
 it assumes TLS terminates on an upstream load balancer that forwards
