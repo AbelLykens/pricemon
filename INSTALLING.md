@@ -206,6 +206,76 @@ A healthy feed logs `READY=1` to systemd within ~30s and then a steady
 stream of trade ticks. The unit has `WatchdogSec=120` so a silent feed
 will be killed and restarted automatically.
 
+## 10b. Low-memory profile (1 GB box)
+
+Skip this section on a host with ≥2 GB RAM. On a 1 GB box, the
+out-of-the-box profile (16 feed processes × ~85 MB + 3 gunicorn workers
++ default Postgres) will not fit. Apply all three of the following:
+
+### a) Run a subset of feeds
+
+Each feed is independent — pick 5–6 high-volume, public-WS exchanges.
+The volume-weighted aggregation degrades gracefully with fewer inputs.
+
+```bash
+for ex in coinbase binance kraken bitstamp bitfinex; do
+    systemctl enable --now "pricemon-feed@${ex}.service"
+done
+systemctl enable pricemon-feeds.target
+```
+
+(Replace step 10's `for ex in ...` loop with this one; do not run both.)
+
+### b) One gunicorn worker
+
+The API is read-mostly and response-cached, so one worker handles
+ordinary load. Override via a systemd drop-in — don't edit the shipped
+unit file.
+
+```bash
+mkdir -p /etc/systemd/system/pricemon-web.service.d
+cat > /etc/systemd/system/pricemon-web.service.d/lean.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/opt/venv/bin/gunicorn pricemon.wsgi:application \
+    --bind unix:/run/pricemon/gunicorn.sock \
+    --umask 0117 \
+    --workers 1 \
+    --threads 4 \
+    --access-logfile - \
+    --error-logfile - \
+    --timeout 30
+EOF
+systemctl daemon-reload
+systemctl restart pricemon-web.service
+```
+
+The empty `ExecStart=` first line is required: it clears the unit's
+inherited `ExecStart` before the override sets a new one.
+
+### c) Postgres tuning
+
+```bash
+install -m 0644 /opt/pricemon/deploy/postgres/low-memory.conf \
+    /etc/postgresql/17/main/conf.d/pricemon-lean.conf
+systemctl restart postgresql
+```
+
+This caps `shared_buffers` at 96 MB, sets `max_connections=30`, and
+disables parallel query — see the file for per-knob rationale.
+
+### Verify
+
+After all three are in place:
+
+```bash
+free -m                  # used should sit around 700-850 MB at steady state
+ps -eo rss,comm --sort=-rss | head -20
+```
+
+Expected steady-state RSS by group: feeds ~500 MB total (5 × ~100 MB),
+Postgres ~250 MB, gunicorn ~70 MB, memcached + nginx + journal ~80 MB.
+
 ## 11. End-to-end smoke check
 
 ```bash
