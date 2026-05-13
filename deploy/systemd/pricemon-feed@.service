@@ -25,6 +25,10 @@ TimeoutStartSec=240
 # Self-detection: if no WATCHDOG=1 ping for this long, kill+restart.
 WatchdogSec=120
 TimeoutStopSec=30
+# Memory caps so a single runaway feed can't thrash the whole box.
+# Steady state per feed is 70-90 MB; binance peaks ~210 MB under load.
+MemoryHigh=384M
+MemoryMax=512M
 # Hardening
 NoNewPrivileges=true
 PrivateTmp=true
