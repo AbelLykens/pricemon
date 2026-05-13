@@ -1,0 +1,38 @@
+[Unit]
+Description=Pricemon /price/summary.json refresh daemon
+PartOf=pricemon-feeds.target
+After=network-online.target postgresql.service memcached.service
+Wants=network-online.target memcached.service
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=pricemon
+Group=pricemon
+WorkingDirectory=/opt/pricemon
+EnvironmentFile=/opt/pricemon/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/venv/bin/python /opt/pricemon/manage.py run_summary_refresh
+# Auto-restart on any exit
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+# Self-detection: refreshes ping the watchdog every ~2s while healthy.
+# 60s of silence is plenty of slack for a slow DB query before systemd
+# decides the daemon is wedged and restarts it.
+WatchdogSec=60
+TimeoutStopSec=15
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/pricemon /var/log/pricemon
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=pricemon-feeds.target

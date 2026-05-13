@@ -1880,6 +1880,18 @@ class HistoryView(View):
 # price.* values are strings (price strings have 4 decimal places), histogram
 # entries use integer prices, and latest_block is proxied verbatim from
 # cheeserobot.org/block.json (blocks[0]).
+#
+# Serving model: the SummaryView is a memory-only read of a pre-serialized
+# JSON body that `run_summary_refresh` rebuilds in the background. Read
+# `SUMMARY_BODY_CACHE_KEY` for the live body and `SUMMARY_BODY_LKG_CACHE_KEY`
+# for the last-known-good fallback used while the daemon is restarting.
+
+SUMMARY_BODY_CACHE_KEY = "summary:body_json"
+SUMMARY_BODY_LKG_CACHE_KEY = "summary:body_json:lkg"
+# Live key expires shortly after one refresh interval so a wedged daemon
+# stops being authoritative. LKG sticks around for hours.
+SUMMARY_BODY_TTL = 30
+SUMMARY_BODY_LKG_TTL = 6 * 60 * 60
 
 _SUMMARY_CACHE_TTL_HIST = 600   # 10 min — histograms are expensive
 _SUMMARY_CACHE_TTL_BLOCK = 60   # how often we ask upstream for a new block
@@ -2043,44 +2055,78 @@ def _latest_block_cached() -> dict | None:
     return lkg
 
 
+def build_summary_body() -> dict:
+    """Assemble the full ``/price/summary.json`` payload.
+
+    Pure compute — does no caching of its own output. The refresh daemon
+    calls this on its loop and writes the JSON-serialized result to the
+    summary cache keys; the view never calls this on the request path.
+    """
+    peg_map = _stable_peg_map()
+    now = timezone.now()
+
+    prices = _live_btc_fiat_prices(peg_map)
+    if "USD" not in prices or "EUR" not in prices:
+        fb = _fallback_btc_fiat_prices(peg_map)
+        for k in ("USD", "EUR"):
+            prices.setdefault(k, fb.get(k))
+
+    when_unix = int(now.timestamp())
+    price_block = {
+        "when": _format_summary_iso_ms(now),
+        "price_usd": f"{prices['USD']:.4f}" if prices.get("USD") is not None else None,
+        "price_eur": f"{prices['EUR']:.4f}" if prices.get("EUR") is not None else None,
+        "source": "pricemon-weighted",
+        "when_unix": str(when_unix),
+    }
+
+    return {
+        "price": price_block,
+        "hist_1d": _histogram_cached("summary:hist_1d", 24, 3600, peg_map),
+        "hist_7d": _histogram_cached("summary:hist_7d", 24 * 7, 14400, peg_map),
+        "latest_block": _latest_block_cached(),
+    }
+
+
+def refresh_summary_body() -> str:
+    """Rebuild the summary body and write it to cache. Returns the JSON string.
+
+    Writes two keys: a short-TTL "live" key the view reads on every request,
+    and a long-TTL "last-known-good" mirror the view falls back to if the
+    live key is gone (daemon restarting, memcached flush, etc.).
+    """
+    body_json = json.dumps(build_summary_body())
+    cache.set(SUMMARY_BODY_CACHE_KEY, body_json, SUMMARY_BODY_TTL)
+    cache.set(SUMMARY_BODY_LKG_CACHE_KEY, body_json, SUMMARY_BODY_LKG_TTL)
+    return body_json
+
+
 class SummaryView(View):
     """``/price/summary.json`` — single-roundtrip payload for the CheeseRobot app.
 
-    Returns current BTC price (USD/EUR) plus a 24h hourly histogram, a 7d
-    4-hour histogram, and the latest Bitcoin block (proxied from cheeserobot.org).
-    Public, unauthenticated, CORS-permissive. Wire shape is the inherited
-    cheeserobot.org contract — do not change field names/types.
+    Memory-only read. The body is pre-serialized by the ``run_summary_refresh``
+    daemon (one process per host) and stashed in memcached; this view just
+    fetches the bytes and returns them. Falls back to the long-TTL
+    last-known-good copy when the live key is missing, and only computes
+    synchronously as a last-ditch warm-up if both keys are empty.
+    Wire shape is the inherited cheeserobot.org contract — do not change
+    field names/types.
     """
 
     def get(self, request):
-        peg_map = _stable_peg_map()
-        now = timezone.now()
+        body_json = cache.get(SUMMARY_BODY_CACHE_KEY)
+        served_from = "live"
+        if body_json is None:
+            body_json = cache.get(SUMMARY_BODY_LKG_CACHE_KEY)
+            served_from = "lkg"
+        if body_json is None:
+            # Cold start: daemon hasn't published yet (e.g. fresh deploy
+            # before the unit came up). Compute once to warm the cache so
+            # subsequent requests stay fast.
+            body_json = refresh_summary_body()
+            served_from = "sync"
 
-        prices = _live_btc_fiat_prices(peg_map)
-        if "USD" not in prices or "EUR" not in prices:
-            fb = _fallback_btc_fiat_prices(peg_map)
-            for k in ("USD", "EUR"):
-                prices.setdefault(k, fb.get(k))
-
-        when_unix = int(now.timestamp())
-        price_block = {
-            "when": _format_summary_iso_ms(now),
-            "price_usd": f"{prices['USD']:.4f}" if prices.get("USD") is not None else None,
-            "price_eur": f"{prices['EUR']:.4f}" if prices.get("EUR") is not None else None,
-            "source": "pricemon-weighted",
-            "when_unix": str(when_unix),
-        }
-
-        body = {
-            "price": price_block,
-            "hist_1d": _histogram_cached("summary:hist_1d", 24, 3600, peg_map),
-            "hist_7d": _histogram_cached("summary:hist_7d", 24 * 7, 14400, peg_map),
-            "latest_block": _latest_block_cached(),
-        }
-
-        resp = HttpResponse(
-            json.dumps(body),
-            content_type="application/json",
-        )
+        resp = HttpResponse(body_json, content_type="application/json")
         resp["Access-Control-Allow-Origin"] = "*"
+        resp["X-Pricemon-Summary-Source"] = served_from
         return resp
