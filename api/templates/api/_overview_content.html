@@ -116,10 +116,16 @@
 {# ── Exchanges grid ────────────────────────────────────────── #}
 {% if rows %}
   <div class="section-head">
-    <h2>Exchanges<em> · across {{ rows|length }} feed{{ rows|length|pluralize }}</em></h2>
+    <h2>Exchanges<em> · {{ fresh_count }} fresh{% if dim_count %} of {{ rows|length }}{% endif %}</em></h2>
     <span class="section-sub">
       {% if show_all %}all quotes
       {% elif selected_quote %}btc / {{ selected_quote }}
+      {% endif %}
+      {% if dim_count %}
+        <button type="button" class="dim-toggle" data-dim-count="{{ dim_count }}">
+          <span class="closed-label">show {{ dim_count }} aging/stale ▾</span>
+          <span class="open-label">hide aging/stale ▴</span>
+        </button>
       {% endif %}
     </span>
   </div>

@@ -450,6 +450,31 @@
     margin-top: 2px;
   }
 
+  /* fresh-only default; stale/aging revealed by body.show-stale */
+  .ex-card.dim { display: none; }
+  body.show-stale .ex-card.dim { display: flex; }
+  body.show-stale .ex-card.dim { opacity: 0.78; }
+
+  .dim-toggle {
+    appearance: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font: inherit; font-size: 11px;
+    font-family: "JetBrains Mono", monospace;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    padding: 5px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    margin-left: 10px;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .dim-toggle:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-hover); }
+  .dim-toggle .open-label { display: none; }
+  body.show-stale .dim-toggle .open-label { display: inline; }
+  body.show-stale .dim-toggle .closed-label { display: none; }
+  body.show-stale .dim-toggle { color: var(--text); border-color: var(--border-strong); }
+
   /* group by quote when ALL mode */
   .ex-group { margin-bottom: 22px; }
   .ex-group .group-label {
@@ -708,12 +733,25 @@
   </div>
 
   <script>
-  // Theme handling — must run before any paint to avoid flash.
+  // Theme + stale-row state — must run before paint to avoid flash.
   (function () {
     const KEY = 'pricemon:theme';
+    const STALE_KEY = 'pricemon:showStale';
     let theme = 'dark';
     try { theme = localStorage.getItem(KEY) || 'dark'; } catch (_) {}
     document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+    try {
+      if (localStorage.getItem(STALE_KEY) === '1') {
+        document.addEventListener('DOMContentLoaded', () => document.body.classList.add('show-stale'));
+      }
+    } catch (_) {}
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dim-toggle');
+      if (!btn) return;
+      const next = !document.body.classList.contains('show-stale');
+      document.body.classList.toggle('show-stale', next);
+      try { localStorage.setItem(STALE_KEY, next ? '1' : '0'); } catch (_) {}
+    });
     document.addEventListener('DOMContentLoaded', () => {
       const btn = document.getElementById('theme-toggle');
       if (!btn) return;

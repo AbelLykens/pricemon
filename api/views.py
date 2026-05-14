@@ -1675,6 +1675,9 @@ class OverviewView(View):
             global_vwap_fiat = {k: v for k, v in global_vwap_fiat.items() if k == selected_quote}
             global_vwap = {k: v for k, v in global_vwap.items() if k == selected_quote}
 
+        fresh_count = sum(1 for r in rows if r["fresh"])
+        dim_count = len(rows) - fresh_count
+
         ctx = {
             "now": now,
             "short_window": self.SHORT_WINDOW_MIN,
@@ -1691,6 +1694,8 @@ class OverviewView(View):
             "show_all": show_all,
             "fresh_window_sec": settings.CURRENT_FRESH_SEC,
             "rows": rows,
+            "fresh_count": fresh_count,
+            "dim_count": dim_count,
             "active_exchanges": Exchange.objects.filter(is_active=True).count(),
             "total_aggregates": MinuteAggregate.objects.count(),
         }
