@@ -1292,7 +1292,8 @@ class CandlesAggView(APIView):
             window = int(request.query_params.get("window", 360))
         except ValueError:
             return Response({"detail": "window must be an integer"}, status=400)
-        window = max(1, min(window, 1440))
+        # Allow windows up to one year so the overview chart can render 7d/31d/365d.
+        window = max(1, min(window, 525600))
         try:
             interval = int(request.query_params.get("interval", 1))
         except ValueError:
@@ -1631,13 +1632,16 @@ class OverviewView(View):
             age_sec = (now - latest_minute).total_seconds() if latest_minute else None
             hour = hourly_map.get(pair.id, {})
             cur = current_by_pair_id.get(pair.id, {"live": False})
-            is_stable = pair.base.code in peg_map or pair.quote.code in peg_map
+            # "Fiat pair": both sides are fiat or stable (e.g. USDT/USD, USD/EUR).
+            # These are rate-input feeds, not BTC markets, so they collapse by
+            # default. BTC-USDT/BTC-USDC stay visible — their base is BTC.
+            is_fiat_pair = pair.base.is_quote and pair.quote.is_quote
             rows.append({
                 "exchange": pair.exchange.slug,
                 "base": pair.base.code,
                 "quote": pair.quote.code,
                 "symbol": pair.cryptofeed_symbol,
-                "is_stable": is_stable,
+                "is_fiat_pair": is_fiat_pair,
                 "latest_minute": latest_minute,
                 "age_sec": age_sec,
                 "fresh": age_sec is not None and age_sec <= 180,
@@ -1688,12 +1692,11 @@ class OverviewView(View):
             global_vwap_fiat = {k: v for k, v in global_vwap_fiat.items() if k == selected_quote}
             global_vwap = {k: v for k, v in global_vwap.items() if k == selected_quote}
 
-        # Only count "fresh, non-stable" rows as default-visible; the rest
-        # hide behind the aging/stale or stablecoin toggles.
-        stable_count = sum(1 for r in rows if r["is_stable"])
-        fresh_count = sum(1 for r in rows if r["fresh"] and not r["is_stable"])
-        dim_count = sum(1 for r in rows if not r["fresh"] and not r["is_stable"])
-        peg_quotes = sorted(peg_map.keys())
+        # Only count fresh, BTC-market rows as default-visible; the rest hide
+        # behind the aging/stale or fiat-pair toggles.
+        fiat_pair_count = sum(1 for r in rows if r["is_fiat_pair"])
+        fresh_count = sum(1 for r in rows if r["fresh"] and not r["is_fiat_pair"])
+        dim_count = sum(1 for r in rows if not r["fresh"] and not r["is_fiat_pair"])
 
         ctx = {
             "now": now,
@@ -1713,8 +1716,7 @@ class OverviewView(View):
             "rows": rows,
             "fresh_count": fresh_count,
             "dim_count": dim_count,
-            "stable_count": stable_count,
-            "peg_quotes": peg_quotes,
+            "fiat_pair_count": fiat_pair_count,
             "active_exchanges": Exchange.objects.filter(is_active=True).count(),
             "total_aggregates": MinuteAggregate.objects.count(),
         }

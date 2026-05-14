@@ -450,19 +450,16 @@
     margin-top: 2px;
   }
 
-  /* fresh-only default; stale/aging and stablecoin pairs revealed by body classes */
+  /* fresh-only default; stale/aging and fiat-pair feeds revealed by body classes */
   .ex-card.dim { display: none; }
   body.show-stale .ex-card.dim { display: flex; opacity: 0.78; }
-  .ex-card.stable { display: none; }
-  body.show-stables .ex-card.stable { display: flex; }
-  /* both toggles must agree to reveal a card that is both stable AND dim */
-  .ex-card.stable.dim { display: none; }
-  body.show-stale.show-stables .ex-card.stable.dim { display: flex; opacity: 0.78; }
-  /* in all-mode the whole group hides when its quote is a stablecoin */
-  .ex-group.stable-group { display: none; }
-  body.show-stables .ex-group.stable-group { display: block; }
+  .ex-card.fiat-pair { display: none; }
+  body.show-fiat-pairs .ex-card.fiat-pair { display: flex; }
+  /* both toggles must agree to reveal a card that is both fiat-pair AND dim */
+  .ex-card.fiat-pair.dim { display: none; }
+  body.show-stale.show-fiat-pairs .ex-card.fiat-pair.dim { display: flex; opacity: 0.78; }
 
-  .dim-toggle, .stable-toggle {
+  .dim-toggle, .fiat-pair-toggle {
     appearance: none;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -476,16 +473,16 @@
     margin-left: 10px;
     transition: color 0.15s, border-color 0.15s, background 0.15s;
   }
-  .dim-toggle:hover, .stable-toggle:hover {
+  .dim-toggle:hover, .fiat-pair-toggle:hover {
     color: var(--text); border-color: var(--border-strong); background: var(--surface-hover);
   }
-  .dim-toggle .open-label, .stable-toggle .open-label { display: none; }
+  .dim-toggle .open-label, .fiat-pair-toggle .open-label { display: none; }
   body.show-stale .dim-toggle .open-label { display: inline; }
   body.show-stale .dim-toggle .closed-label { display: none; }
   body.show-stale .dim-toggle { color: var(--text); border-color: var(--border-strong); }
-  body.show-stables .stable-toggle .open-label { display: inline; }
-  body.show-stables .stable-toggle .closed-label { display: none; }
-  body.show-stables .stable-toggle { color: var(--text); border-color: var(--border-strong); }
+  body.show-fiat-pairs .fiat-pair-toggle .open-label { display: inline; }
+  body.show-fiat-pairs .fiat-pair-toggle .closed-label { display: none; }
+  body.show-fiat-pairs .fiat-pair-toggle { color: var(--text); border-color: var(--border-strong); }
 
   /* group by quote when ALL mode */
   .ex-group { margin-bottom: 22px; }
@@ -679,6 +676,9 @@
                 <button type="button" class="pill" data-chart-window="360">6h</button>
                 <button type="button" class="pill" data-chart-window="720">12h</button>
                 <button type="button" class="pill" data-chart-window="1440">24h</button>
+                <button type="button" class="pill" data-chart-window="10080">7d</button>
+                <button type="button" class="pill" data-chart-window="44640">31d</button>
+                <button type="button" class="pill" data-chart-window="525600">365d</button>
               </div>
             </div>
             <div class="chart-box" data-fiat-chart="{{ fiat }}"></div>
@@ -749,14 +749,14 @@
   (function () {
     const KEY = 'pricemon:theme';
     const STALE_KEY = 'pricemon:showStale';
-    const STABLES_KEY = 'pricemon:showStables';
+    const FIAT_PAIRS_KEY = 'pricemon:showFiatPairs';
     let theme = 'dark';
     try { theme = localStorage.getItem(KEY) || 'dark'; } catch (_) {}
     document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
     document.addEventListener('DOMContentLoaded', () => {
       try {
         if (localStorage.getItem(STALE_KEY) === '1') document.body.classList.add('show-stale');
-        if (localStorage.getItem(STABLES_KEY) === '1') document.body.classList.add('show-stables');
+        if (localStorage.getItem(FIAT_PAIRS_KEY) === '1') document.body.classList.add('show-fiat-pairs');
       } catch (_) {}
     });
     document.addEventListener('click', (e) => {
@@ -767,11 +767,11 @@
         try { localStorage.setItem(STALE_KEY, next ? '1' : '0'); } catch (_) {}
         return;
       }
-      const stable = e.target.closest('.stable-toggle');
-      if (stable) {
-        const next = !document.body.classList.contains('show-stables');
-        document.body.classList.toggle('show-stables', next);
-        try { localStorage.setItem(STABLES_KEY, next ? '1' : '0'); } catch (_) {}
+      const fp = e.target.closest('.fiat-pair-toggle');
+      if (fp) {
+        const next = !document.body.classList.contains('show-fiat-pairs');
+        document.body.classList.toggle('show-fiat-pairs', next);
+        try { localStorage.setItem(FIAT_PAIRS_KEY, next ? '1' : '0'); } catch (_) {}
       }
     });
     document.addEventListener('DOMContentLoaded', () => {
@@ -1008,7 +1008,14 @@
     const DEFAULT_WINDOW_MIN = 360;
     const STORAGE_KEY = 'pricemon:chartWindowMin';
     const REFRESH_MS = 15000;
-    const INTERVAL_FOR_WINDOW = { 60: 1, 120: 1, 360: 1, 720: 5, 1440: 5 };
+    // Bucket size per window — keeps ~60–365 candles on screen at every zoom.
+    const INTERVAL_FOR_WINDOW = {
+      60: 1, 120: 1, 360: 1, 720: 5, 1440: 5,
+      10080: 60,        // 7d  → hourly  (168 bars)
+      44640: 240,       // 31d → 4h     (186 bars)
+      525600: 1440,     // 365d → daily (365 bars)
+    };
+    const ALLOWED_WINDOWS = new Set(Object.keys(INTERVAL_FOR_WINDOW).map(Number));
     const fiats = Array.from(document.querySelectorAll('[data-fiat-chart]'))
       .map(el => el.dataset.fiatChart);
     if (!fiats.length || typeof LightweightCharts === 'undefined') return;
@@ -1016,12 +1023,15 @@
     let windowMin = DEFAULT_WINDOW_MIN;
     try {
       const stored = Number(localStorage.getItem(STORAGE_KEY));
-      const allowed = new Set([60, 120, 360, 720, 1440]);
-      if (allowed.has(stored)) windowMin = stored;
+      if (ALLOWED_WINDOWS.has(stored)) windowMin = stored;
     } catch (_) {}
 
     function intervalFor(w) { return INTERVAL_FOR_WINDOW[w] || 1; }
-    function fmtInterval(m) { return m < 60 ? `${m}m` : `${m / 60}h`; }
+    function fmtInterval(m) {
+      if (m < 60) return `${m}m`;
+      if (m < 1440) return `${m / 60}h`;
+      return `${m / 1440}d`;
+    }
 
     function chartThemeOpts() {
       const styles = getComputedStyle(document.documentElement);
@@ -1113,17 +1123,26 @@
         const data = await res.json();
         const intResp = data.interval_minutes || interval;
         const intLabel = fmtInterval(intResp);
+        // Hide hh:mm tick labels for daily candles — they'd all read 00:00 UTC.
+        const dailyOrCoarser = intResp >= 1440;
         for (const fiat of targets) {
           const entry = charts[fiat];
           const bars = (data.series && data.series[fiat]) || [];
           if (!entry) continue;
+          entry.chart.applyOptions({
+            timeScale: { timeVisible: !dailyOrCoarser, secondsVisible: false },
+          });
           entry.series.setData(bars);
+          // Fit the candles to the requested window every refresh so the
+          // user's chosen 7d/31d/365d frame always fills the chart box.
+          entry.chart.timeScale().fitContent();
           if (bars.length === 0) {
             setStatus(fiat, 'no data in window', true);
           } else {
             const last = bars[bars.length - 1];
-            const ts = new Date(last.time * 1000).toISOString().slice(11, 16);
-            setStatus(fiat, `${bars.length} bars · ${intLabel} · last ${ts} utc · ${last.close.toFixed(2)} ${fiat}`, false);
+            const iso = new Date(last.time * 1000).toISOString();
+            const ts = dailyOrCoarser ? iso.slice(0, 10) : iso.slice(11, 16) + ' utc';
+            setStatus(fiat, `${bars.length} bars · ${intLabel} · last ${ts} · ${last.close.toFixed(2)} ${fiat}`, false);
           }
         }
       } catch (err) {
