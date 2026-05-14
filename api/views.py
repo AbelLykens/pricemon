@@ -1631,10 +1631,13 @@ class OverviewView(View):
             age_sec = (now - latest_minute).total_seconds() if latest_minute else None
             hour = hourly_map.get(pair.id, {})
             cur = current_by_pair_id.get(pair.id, {"live": False})
+            is_stable = pair.base.code in peg_map or pair.quote.code in peg_map
             rows.append({
                 "exchange": pair.exchange.slug,
+                "base": pair.base.code,
                 "quote": pair.quote.code,
                 "symbol": pair.cryptofeed_symbol,
+                "is_stable": is_stable,
                 "latest_minute": latest_minute,
                 "age_sec": age_sec,
                 "fresh": age_sec is not None and age_sec <= 180,
@@ -1685,8 +1688,12 @@ class OverviewView(View):
             global_vwap_fiat = {k: v for k, v in global_vwap_fiat.items() if k == selected_quote}
             global_vwap = {k: v for k, v in global_vwap.items() if k == selected_quote}
 
-        fresh_count = sum(1 for r in rows if r["fresh"])
-        dim_count = len(rows) - fresh_count
+        # Only count "fresh, non-stable" rows as default-visible; the rest
+        # hide behind the aging/stale or stablecoin toggles.
+        stable_count = sum(1 for r in rows if r["is_stable"])
+        fresh_count = sum(1 for r in rows if r["fresh"] and not r["is_stable"])
+        dim_count = sum(1 for r in rows if not r["fresh"] and not r["is_stable"])
+        peg_quotes = sorted(peg_map.keys())
 
         ctx = {
             "now": now,
@@ -1706,6 +1713,8 @@ class OverviewView(View):
             "rows": rows,
             "fresh_count": fresh_count,
             "dim_count": dim_count,
+            "stable_count": stable_count,
+            "peg_quotes": peg_quotes,
             "active_exchanges": Exchange.objects.filter(is_active=True).count(),
             "total_aggregates": MinuteAggregate.objects.count(),
         }

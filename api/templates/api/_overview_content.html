@@ -116,7 +116,7 @@
 {# ── Exchanges grid ────────────────────────────────────────── #}
 {% if rows %}
   <div class="section-head">
-    <h2>Exchanges<em> · {{ fresh_count }} fresh{% if dim_count %} of {{ rows|length }}{% endif %}</em></h2>
+    <h2>Exchanges<em> · {{ fresh_count }} fresh{% if dim_count or stable_count %} of {{ rows|length }}{% endif %}</em></h2>
     <span class="section-sub">
       {% if show_all %}all quotes
       {% elif selected_quote %}btc / {{ selected_quote }}
@@ -127,13 +127,19 @@
           <span class="open-label">hide aging/stale ▴</span>
         </button>
       {% endif %}
+      {% if stable_count %}
+        <button type="button" class="stable-toggle" data-stable-count="{{ stable_count }}">
+          <span class="closed-label">show {{ stable_count }} stable ▾</span>
+          <span class="open-label">hide stable ▴</span>
+        </button>
+      {% endif %}
     </span>
   </div>
 
   {% if show_all %}
     {% regroup rows by quote as rows_by_quote %}
     {% for group in rows_by_quote %}
-      <div class="ex-group">
+      <div class="ex-group{% if group.grouper in peg_quotes %} stable-group{% endif %}">
         <div class="group-label">btc / {{ group.grouper }} · {{ group.list|length }} feed{{ group.list|length|pluralize }}</div>
         <div class="ex-grid">
           {% for r in group.list %}

@@ -450,12 +450,19 @@
     margin-top: 2px;
   }
 
-  /* fresh-only default; stale/aging revealed by body.show-stale */
+  /* fresh-only default; stale/aging and stablecoin pairs revealed by body classes */
   .ex-card.dim { display: none; }
-  body.show-stale .ex-card.dim { display: flex; }
-  body.show-stale .ex-card.dim { opacity: 0.78; }
+  body.show-stale .ex-card.dim { display: flex; opacity: 0.78; }
+  .ex-card.stable { display: none; }
+  body.show-stables .ex-card.stable { display: flex; }
+  /* both toggles must agree to reveal a card that is both stable AND dim */
+  .ex-card.stable.dim { display: none; }
+  body.show-stale.show-stables .ex-card.stable.dim { display: flex; opacity: 0.78; }
+  /* in all-mode the whole group hides when its quote is a stablecoin */
+  .ex-group.stable-group { display: none; }
+  body.show-stables .ex-group.stable-group { display: block; }
 
-  .dim-toggle {
+  .dim-toggle, .stable-toggle {
     appearance: none;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -469,11 +476,16 @@
     margin-left: 10px;
     transition: color 0.15s, border-color 0.15s, background 0.15s;
   }
-  .dim-toggle:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-hover); }
-  .dim-toggle .open-label { display: none; }
+  .dim-toggle:hover, .stable-toggle:hover {
+    color: var(--text); border-color: var(--border-strong); background: var(--surface-hover);
+  }
+  .dim-toggle .open-label, .stable-toggle .open-label { display: none; }
   body.show-stale .dim-toggle .open-label { display: inline; }
   body.show-stale .dim-toggle .closed-label { display: none; }
   body.show-stale .dim-toggle { color: var(--text); border-color: var(--border-strong); }
+  body.show-stables .stable-toggle .open-label { display: inline; }
+  body.show-stables .stable-toggle .closed-label { display: none; }
+  body.show-stables .stable-toggle { color: var(--text); border-color: var(--border-strong); }
 
   /* group by quote when ALL mode */
   .ex-group { margin-bottom: 22px; }
@@ -733,24 +745,34 @@
   </div>
 
   <script>
-  // Theme + stale-row state — must run before paint to avoid flash.
+  // Theme + collapsible-row state — must run before paint to avoid flash.
   (function () {
     const KEY = 'pricemon:theme';
     const STALE_KEY = 'pricemon:showStale';
+    const STABLES_KEY = 'pricemon:showStables';
     let theme = 'dark';
     try { theme = localStorage.getItem(KEY) || 'dark'; } catch (_) {}
     document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
-    try {
-      if (localStorage.getItem(STALE_KEY) === '1') {
-        document.addEventListener('DOMContentLoaded', () => document.body.classList.add('show-stale'));
-      }
-    } catch (_) {}
+    document.addEventListener('DOMContentLoaded', () => {
+      try {
+        if (localStorage.getItem(STALE_KEY) === '1') document.body.classList.add('show-stale');
+        if (localStorage.getItem(STABLES_KEY) === '1') document.body.classList.add('show-stables');
+      } catch (_) {}
+    });
     document.addEventListener('click', (e) => {
-      const btn = e.target.closest('.dim-toggle');
-      if (!btn) return;
-      const next = !document.body.classList.contains('show-stale');
-      document.body.classList.toggle('show-stale', next);
-      try { localStorage.setItem(STALE_KEY, next ? '1' : '0'); } catch (_) {}
+      const dim = e.target.closest('.dim-toggle');
+      if (dim) {
+        const next = !document.body.classList.contains('show-stale');
+        document.body.classList.toggle('show-stale', next);
+        try { localStorage.setItem(STALE_KEY, next ? '1' : '0'); } catch (_) {}
+        return;
+      }
+      const stable = e.target.closest('.stable-toggle');
+      if (stable) {
+        const next = !document.body.classList.contains('show-stables');
+        document.body.classList.toggle('show-stables', next);
+        try { localStorage.setItem(STABLES_KEY, next ? '1' : '0'); } catch (_) {}
+      }
     });
     document.addEventListener('DOMContentLoaded', () => {
       const btn = document.getElementById('theme-toggle');

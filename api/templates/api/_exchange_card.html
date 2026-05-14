@@ -1,5 +1,5 @@
 {# Single exchange row card — used inside _overview_content.html. #}
-<div class="ex-card{% if not r.fresh %} dim{% endif %}">
+<div class="ex-card{% if not r.fresh %} dim{% endif %}{% if r.is_stable %} stable{% endif %}">
   <div class="ex-head">
     <div>
       <div class="ex-name">{{ r.exchange }}</div>
