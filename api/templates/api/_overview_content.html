@@ -20,7 +20,7 @@
 {% endif %}
 
 {# ── Hero band: live + window VWAP ─────────────────────────── #}
-<div class="hero{% if not show_all and selected_quote %} single{% endif %}">
+<div class="hero">
   {% for fiat, slot in live_fiat.items %}
     <div class="card fiat-merged">
       <div class="label">

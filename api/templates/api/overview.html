@@ -5,9 +5,7 @@
 <meta charset="utf-8">
 <title>pricemon · BTC overview</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="{% static 'api/fonts/fonts.css' %}" rel="stylesheet">
 <style>
   :root {
     --bg: #0a0b0d;
@@ -290,13 +288,10 @@
   /* ── Hero cards ─────────────────────────────────────── */
   .hero {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 18px;
     margin-bottom: 28px;
   }
-  .hero.single { grid-template-columns: 1fr; }
-  .hero.single .card { padding: 32px 36px; }
-  .hero.single .price { font-size: 64px; }
 
   .card {
     background: var(--surface);
