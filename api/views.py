@@ -1611,9 +1611,19 @@ class OverviewView(View):
         hourly_map = {r["pair_id"]: r for r in hourly}
 
         rows = []
+        # BTC-base direct-fiat pairs first (BTC-USD, BTC-EUR), then BTC-base
+        # stablecoin pairs (BTC-USDT, BTC-USDC) grouped per stable; stablecoin
+        # rate-input pairs (USDT-USD, USDC-USD) at the very bottom.
         sorted_pairs = sorted(
             active_pairs,
-            key=lambda p: (p.exchange.slug, p.cryptofeed_symbol),
+            key=lambda p: (
+                p.base.code != "BTC",
+                p.base.code in peg_map,
+                p.quote.code in peg_map,
+                p.quote.code,
+                p.exchange.slug,
+                p.cryptofeed_symbol,
+            ),
         )
         for pair in sorted_pairs:
             latest_minute = latest_map.get(pair.id)
