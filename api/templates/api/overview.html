@@ -1,214 +1,874 @@
 {% load static %}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <title>pricemon · BTC overview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    --bg: #0a0b0d;
+    --bg-grain: rgba(255, 255, 255, 0.012);
+    --surface: #15171b;
+    --surface-2: #1c1f24;
+    --surface-hover: #20242a;
+    --border: #25282d;
+    --border-strong: #34383f;
+    --text: #ececec;
+    --text-muted: #8b8f95;
+    --text-faint: #5d6168;
+    --accent: #e6a23c;
+    --accent-soft: rgba(230, 162, 60, 0.14);
+    --ok: #3aa75e;
+    --warn: #d39e3a;
+    --bad: #c44e4e;
+    --link: #6aa6ff;
+    --chart-bg: #15171b;
+    --chart-grid: #23262b;
+    --rule: #1f2227;
+    color-scheme: dark;
+  }
+  [data-theme="light"] {
+    --bg: #faf9f5;
+    --bg-grain: rgba(0, 0, 0, 0.015);
+    --surface: #ffffff;
+    --surface-2: #f4f2ec;
+    --surface-hover: #ebe9e2;
+    --border: #e2dfd6;
+    --border-strong: #cdc9bc;
+    --text: #1a1816;
+    --text-muted: #6a655c;
+    --text-faint: #9b968b;
+    --accent: #a3681a;
+    --accent-soft: rgba(163, 104, 26, 0.10);
+    --ok: #2f8d4e;
+    --warn: #b27a1f;
+    --bad: #a83a36;
+    --link: #2a5cb0;
+    --chart-bg: #ffffff;
+    --chart-grid: #ece9e0;
+    --rule: #ece9e0;
+    color-scheme: light;
+  }
+
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-         background: #0e0f12; color: #e8e8e8; padding: 24px; }
-  h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
-  .sub { color: #8b8f95; margin-bottom: 24px; font-size: 13px; }
-  .hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-          gap: 16px; margin-bottom: 28px; }
-  .card { background: #1a1c20; border: 1px solid #25282d; border-radius: 8px;
-          padding: 18px 22px; }
-  .card .label { color: #8b8f95; font-size: 12px; text-transform: uppercase;
-                 letter-spacing: 0.06em;
-                 display: flex; align-items: baseline; justify-content: space-between;
-                 gap: 8px; }
-  .card .label .json-link { font-size: 10px; letter-spacing: 0.04em;
-                            color: #5d6168; text-transform: uppercase; }
-  .card .label .json-link:hover { color: #6aa6ff; }
-  .card .price { font-size: 32px; font-weight: 600; margin-top: 6px; font-variant-numeric: tabular-nums; }
-  .card .price.live { color: #e8e8e8; }
-  .card .price.stale { color: #d39e3a; }
-  .card .sub-price { color: #8b8f95; font-size: 13px; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .card .meta { color: #8b8f95; font-size: 12px; margin-top: 6px; }
-  .card.fiat-merged { border-color: #3a4757; }
-  .card.fiat-merged .label .merge-tag { color: #6aa6ff; font-weight: 600; margin-left: 6px; }
-  .card .components { color: #8b8f95; font-size: 11px; margin-top: 8px;
-                      font-variant-numeric: tabular-nums; }
-  .card .components span { margin-right: 10px; }
-  .rates { background: #14161a; border: 1px solid #25282d; border-radius: 8px;
-           padding: 10px 14px; margin-bottom: 24px;
-           font-size: 12px; color: #8b8f95;
-           font-variant-numeric: tabular-nums; }
-  .rates b { color: #d8d8d8; }
-  .rates span { margin-right: 18px; }
-  .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-              background: #3aa75e; margin-right: 6px; vertical-align: middle;
-              animation: pulse 1.6s ease-in-out infinite; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-image:
+      radial-gradient(800px 600px at 80% -10%, var(--accent-soft) 0%, transparent 60%),
+      radial-gradient(900px 700px at -10% 110%, var(--accent-soft) 0%, transparent 55%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; }
+
+  /* ── Masthead ───────────────────────────────────────── */
+  .masthead {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    gap: 16px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 22px;
+  }
+  .brand {
+    font-family: "Instrument Serif", "Times New Roman", serif;
+    font-size: 38px;
+    line-height: 1;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .brand .dot-mark {
+    display: inline-block; width: 7px; height: 7px;
+    background: var(--accent); border-radius: 50%;
+    transform: translateY(-12px); margin-left: 4px;
+  }
+  .tagline {
+    color: var(--text-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    margin-top: 6px;
+    font-weight: 500;
+  }
+  .tagline em {
+    font-family: "Instrument Serif", serif;
+    font-style: italic;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--text);
+    font-size: 14px;
+  }
+  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+
+  .icon-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    width: 34px; height: 34px;
+    border-radius: 999px;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font: inherit; font-size: 14px;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .icon-btn:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+  .icon-btn .sun, .icon-btn .moon { display: none; }
+  [data-theme="dark"] .icon-btn .sun { display: inline; }
+  [data-theme="light"] .icon-btn .moon { display: inline; }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 12px 6px 10px; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); font-size: 12px; line-height: 1;
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    cursor: default;
+  }
+  .status-pill .live-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ok);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .status-pill .status-text { color: var(--text-muted); }
+  .status-pill[data-state="ok"] .live-dot { background: var(--ok); }
+  .status-pill[data-state="loading"] .live-dot { background: var(--link); }
+  .status-pill[data-state="paused"] .live-dot { background: var(--text-faint); animation: none; }
+  .status-pill[data-state="paused"] .status-text { color: var(--text-faint); }
+  .status-pill[data-state="error"] .live-dot { background: var(--bad); animation: none; }
+  .status-pill[data-state="error"] .status-text { color: var(--bad); }
   @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
-  table { width: 100%; border-collapse: collapse; background: #1a1c20;
-          border: 1px solid #25282d; border-radius: 8px; overflow: hidden;
-          font-variant-numeric: tabular-nums; }
-  th, td { padding: 9px 14px; border-bottom: 1px solid #25282d; text-align: right; }
-  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
-  th { background: #14161a; color: #8b8f95; text-transform: uppercase;
-       font-size: 11px; letter-spacing: 0.06em; font-weight: 600; }
-  tr:last-child td { border-bottom: none; }
-  td.num { color: #d8d8d8; }
-  td.muted { color: #5d6168; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-         margin-right: 8px; vertical-align: middle; }
-  .ok { background: #3aa75e; }
-  .warn { background: #d39e3a; }
-  .bad { background: #c44e4e; }
-  .legend { color: #8b8f95; font-size: 12px; margin: 4px 0 10px;
-            display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
-  .legend > span { display: inline-flex; align-items: center; }
-  .footer { color: #5d6168; font-size: 12px; margin-top: 24px; }
-  a { color: #6aa6ff; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-            gap: 16px; margin-bottom: 18px; }
-  .chart-card { background: #1a1c20; border: 1px solid #25282d; border-radius: 8px;
-                padding: 14px 16px 10px; }
-  .chart-card .chart-head { display: flex; align-items: baseline; justify-content: space-between;
-                            margin-bottom: 6px; }
-  .chart-card .chart-title { font-size: 13px; color: #8b8f95; text-transform: uppercase;
-                             letter-spacing: 0.06em; }
-  .chart-card .chart-status { font-size: 11px; color: #5d6168; font-variant-numeric: tabular-nums; }
-  .chart-card .chart-status.bad { color: #c44e4e; }
-  .chart-card .chart-box { height: 280px; }
-  .chart-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
-                    margin-bottom: 12px; padding: 8px 12px;
-                    background: #14161a; border: 1px solid #25282d; border-radius: 8px; }
-  .chart-controls .label { color: #8b8f95; font-size: 11px; text-transform: uppercase;
-                           letter-spacing: 0.06em; margin-right: 4px; }
-  .chart-controls .pill { display: inline-block; padding: 4px 10px; border-radius: 999px;
-                          border: 1px solid #25282d; background: transparent; color: #d8d8d8;
-                          font: inherit; font-size: 12px; cursor: pointer;
-                          font-variant-numeric: tabular-nums; }
-  .chart-controls .pill:hover { background: #1a1c20; }
-  .chart-controls .pill.active { background: #2a3548; border-color: #3a4757; color: #e8e8e8; }
 
-  /* AJAX auto-refresh chrome */
-  .progress-bar { position: fixed; top: 0; left: 0; height: 2px;
-                  background: linear-gradient(90deg, #6aa6ff 0%, #3aa75e 100%);
-                  width: 0; opacity: 0; pointer-events: none; z-index: 100;
-                  transition: width 0.25s ease-out, opacity 0.4s ease-out; }
-  .progress-bar.loading { opacity: 1; width: 70%;
-                          transition: width 6s cubic-bezier(.05,.7,.1,1), opacity 0.15s; }
-  .progress-bar.done { opacity: 0; width: 100%;
-                       transition: width 0.18s ease-out, opacity 0.45s ease-out 0.2s; }
-
-  .status-pill { display: inline-flex; align-items: center; gap: 8px;
-                 padding: 3px 10px 3px 8px; border-radius: 999px;
-                 background: #14161a; border: 1px solid #25282d;
-                 color: #d8d8d8; font-size: 12px; line-height: 1;
-                 font-variant-numeric: tabular-nums; cursor: default; }
-  .status-pill .live-dot { margin: 0; }
-  .status-pill .status-text { color: #8b8f95; }
-  .status-pill[data-state="ok"] .live-dot { background: #3aa75e; }
-  .status-pill[data-state="loading"] .live-dot { background: #6aa6ff; }
-  .status-pill[data-state="paused"] .live-dot { background: #5d6168;
-                                                animation: none; }
-  .status-pill[data-state="paused"] .status-text { color: #5d6168; }
-  .status-pill[data-state="error"] .live-dot { background: #c44e4e;
-                                               animation: none; }
-  .status-pill[data-state="error"] .status-text { color: #c44e4e; }
-  .refresh-btn { background: transparent; color: #6aa6ff; border: 0;
-                 cursor: pointer; font: inherit; padding: 0 2px;
-                 text-decoration: none; }
+  .refresh-btn {
+    background: transparent; color: var(--link); border: 0;
+    cursor: pointer; font: inherit; font-size: 13px;
+    padding: 0 4px;
+  }
   .refresh-btn:hover { text-decoration: underline; }
-  .refresh-btn:disabled { color: #5d6168; cursor: wait; }
+  .refresh-btn:disabled { color: var(--text-faint); cursor: wait; }
 
+  /* ── Currency selector ──────────────────────────────── */
+  .selector {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+    margin: 6px 0 26px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+  .selector .label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--text-muted); margin-right: 6px; font-weight: 600;
+  }
+  .selector .pill {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font: inherit; font-size: 13px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    letter-spacing: 0.04em;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .selector .pill:hover { background: var(--surface-hover); }
+  .selector .pill.active {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+    font-weight: 600;
+  }
+  .selector .pill.all { color: var(--accent); border-color: var(--accent); border-style: dashed; }
+  .selector .pill.all.active { background: var(--accent); color: var(--bg); border-style: solid; }
+  .selector .pill.secondary { opacity: 0.7; }
+  .selector .secondary-group {
+    display: none; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .selector.expanded .secondary-group { display: inline-flex; }
+  .selector .toggle-more {
+    background: transparent; color: var(--text-muted);
+    border: 0; cursor: pointer; font: inherit; font-size: 12px;
+    padding: 0 4px;
+  }
+  .selector .toggle-more:hover { color: var(--text); }
+  .selector .spacer { flex: 1; }
+
+  /* ── Charts ─────────────────────────────────────────── */
+  .chart-shell {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 18px 12px;
+    margin-bottom: 22px;
+  }
+  .chart-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 10px; gap: 14px; flex-wrap: wrap;
+  }
+  .chart-title {
+    font-family: "Instrument Serif", serif;
+    font-size: 22px;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+  .chart-title .pair {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    color: var(--text-muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-left: 8px;
+  }
+  .chart-status {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; color: var(--text-faint);
+  }
+  .chart-status.bad { color: var(--bad); }
+  .chart-box { height: 320px; }
+  .chart-card { display: none; }
+  .chart-card.active { display: block; }
+  .charts-all .chart-card { display: block; }
+  .charts-all { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+  .charts-all .chart-shell { margin-bottom: 0; }
+  .charts-all .chart-box { height: 260px; }
+
+  .window-pills { display: flex; gap: 4px; flex-wrap: wrap; }
+  .window-pills .pill {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font: inherit; font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-family: "JetBrains Mono", monospace;
+  }
+  .window-pills .pill:hover { color: var(--text); background: var(--surface-hover); }
+  .window-pills .pill.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+  .chart-empty {
+    height: 320px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-faint); font-family: "Instrument Serif", serif;
+    font-style: italic; font-size: 18px;
+  }
+
+  /* ── Stable rates strip ─────────────────────────────── */
+  .rates {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin-bottom: 22px;
+    font-size: 12px; color: var(--text-muted);
+    font-family: "JetBrains Mono", monospace;
+    display: flex; flex-wrap: wrap; gap: 4px 22px;
+  }
+  .rates .heading {
+    color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.12em;
+    font-size: 11px; font-family: "Manrope", sans-serif;
+    font-weight: 600; margin-right: 8px;
+  }
+  .rates b { color: var(--text); font-weight: 600; }
+  .rates .ex-count { color: var(--text-faint); }
+
+  /* ── Hero cards ─────────────────────────────────────── */
+  .hero {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 18px;
+    margin-bottom: 28px;
+  }
+  .hero.single { grid-template-columns: 1fr; }
+  .hero.single .card { padding: 32px 36px; }
+  .hero.single .price { font-size: 64px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 22px 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .card.fiat-merged { border-color: var(--border-strong); }
+  .card.fiat-merged::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px; background: var(--accent);
+  }
+  .card .label {
+    color: var(--text-muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-bottom: 4px; font-weight: 600;
+  }
+  .card .label .label-left { display: inline-flex; align-items: center; gap: 8px; }
+  .card .label .live-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--ok);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .card .label .merge-tag {
+    color: var(--accent); font-weight: 700; margin-left: 2px;
+    font-size: 10px; letter-spacing: 0.12em;
+  }
+  .card .label .json-link {
+    color: var(--text-faint); font-size: 10px; letter-spacing: 0.08em;
+  }
+  .card .label .json-link:hover { color: var(--link); }
+  .card .price {
+    font-family: "Instrument Serif", serif;
+    font-size: 44px; line-height: 1.05;
+    margin-top: 10px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+  .card .price.live { color: var(--text); }
+  .card .price.stale { color: var(--warn); }
+  .card .price .ccy {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-left: 8px;
+    vertical-align: 0.45em;
+    letter-spacing: 0.06em;
+  }
+  .card .meta {
+    color: var(--text-muted); font-size: 12px; margin-top: 8px;
+    font-family: "JetBrains Mono", monospace;
+  }
+  .card .components {
+    color: var(--text-faint); font-size: 11px; margin-top: 10px;
+    font-family: "JetBrains Mono", monospace;
+    display: flex; flex-wrap: wrap; gap: 4px 14px;
+  }
+
+  /* ── Section heading ────────────────────────────────── */
+  .section-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 14px; margin: 30px 0 12px; flex-wrap: wrap;
+  }
+  .section-head h2 {
+    font-family: "Instrument Serif", serif;
+    font-size: 26px; font-weight: 400; margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .section-head h2 em { font-style: italic; color: var(--text-muted); }
+  .section-head .section-sub {
+    color: var(--text-faint); font-size: 12px;
+    font-family: "JetBrains Mono", monospace;
+    letter-spacing: 0.04em;
+  }
+
+  /* ── Exchanges grid ─────────────────────────────────── */
+  .ex-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .ex-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: border-color 0.15s, transform 0.15s;
+  }
+  .ex-card:hover { border-color: var(--border-strong); }
+  .ex-card .ex-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px;
+  }
+  .ex-card .ex-name {
+    font-weight: 600; font-size: 14px; letter-spacing: 0.02em;
+    text-transform: capitalize;
+  }
+  .ex-card .ex-symbol {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--text-faint); font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+  .ex-card .freshness {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .ex-card .freshness .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+  }
+  .ex-card .freshness.ok .dot { background: var(--ok); }
+  .ex-card .freshness.warn .dot { background: var(--warn); }
+  .ex-card .freshness.bad .dot { background: var(--bad); }
+  .ex-card .price-line {
+    font-family: "Instrument Serif", serif;
+    font-size: 24px; line-height: 1;
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+  }
+  .ex-card .price-line.stale { color: var(--warn); }
+  .ex-card .price-line.muted { color: var(--text-faint); font-style: italic; font-size: 18px; }
+  .ex-card .price-line .age {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: 6px;
+    font-style: normal;
+  }
+  .ex-card .drift {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; color: var(--text-muted);
+  }
+  .ex-card .drift.up { color: var(--ok); }
+  .ex-card .drift.down { color: var(--bad); }
+  .ex-card .stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 8px;
+    border-top: 1px solid var(--rule);
+    padding-top: 10px;
+  }
+  .ex-card .stats .stat .v {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px; color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .ex-card .stats .stat .k {
+    color: var(--text-faint); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin-top: 2px;
+  }
+
+  /* group by quote when ALL mode */
+  .ex-group { margin-bottom: 22px; }
+  .ex-group .group-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.14em;
+    margin: 6px 0 10px;
+  }
+
+  .empty {
+    background: var(--surface); border: 1px dashed var(--border-strong);
+    border-radius: 12px; padding: 24px;
+    color: var(--text-muted); text-align: center;
+    font-family: "Instrument Serif", serif; font-style: italic;
+    font-size: 16px;
+  }
+
+  /* ── Sub-detail line under selector / above hero ────── */
+  .sub-detail {
+    color: var(--text-muted); font-size: 12px;
+    font-family: "JetBrains Mono", monospace;
+    margin-bottom: 18px;
+    letter-spacing: 0.02em;
+  }
+  .sub-detail .dim { color: var(--text-faint); }
+
+  /* ── Top navigation ─────────────────────────────────── */
+  .topnav {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    margin: 0 0 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px dashed var(--rule);
+  }
+  .topnav a {
+    color: var(--text-muted);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    text-decoration: none;
+    padding: 4px 0;
+    border-bottom: 1px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .topnav a:hover { color: var(--text); border-bottom-color: var(--accent); text-decoration: none; }
+  .topnav a.active { color: var(--text); border-bottom-color: var(--accent); }
+  .topnav .sep {
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--text-faint); opacity: 0.4;
+  }
+
+  /* ── Footer (real one) ──────────────────────────────── */
+  .footer {
+    margin-top: 48px; padding-top: 28px;
+    border-top: 1px solid var(--rule);
+    display: grid;
+    grid-template-columns: 1.4fr repeat(3, 1fr);
+    gap: 28px;
+  }
+  .footer .col h4 {
+    margin: 0 0 12px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--text-faint); font-weight: 600;
+  }
+  .footer .col ul { list-style: none; margin: 0; padding: 0; }
+  .footer .col li { margin: 0 0 6px; }
+  .footer .col a {
+    color: var(--text); font-size: 13px;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s, color 0.15s;
+    display: inline-flex; align-items: baseline; gap: 6px;
+  }
+  .footer .col a:hover { color: var(--accent); border-bottom-color: var(--accent); text-decoration: none; }
+  .footer .col a .endpoint {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--text-muted); font-size: 11px;
+  }
+  .footer .col p {
+    margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.55;
+  }
+  .footer .colophon {
+    color: var(--text-faint); font-family: "JetBrains Mono", monospace;
+    font-size: 11px; margin-top: 12px;
+  }
+  .footer .colophon span { color: var(--text-muted); }
+  @media (max-width: 820px) {
+    .footer { grid-template-columns: 1fr 1fr; }
+  }
+
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── Refresh chrome ─────────────────────────────────── */
+  .progress-bar {
+    position: fixed; top: 0; left: 0; height: 2px;
+    background: linear-gradient(90deg, var(--link), var(--accent));
+    width: 0; opacity: 0; pointer-events: none; z-index: 100;
+    transition: width 0.25s ease-out, opacity 0.4s ease-out;
+  }
+  .progress-bar.loading {
+    opacity: 1; width: 70%;
+    transition: width 6s cubic-bezier(.05,.7,.1,1), opacity 0.15s;
+  }
+  .progress-bar.done {
+    opacity: 0; width: 100%;
+    transition: width 0.18s ease-out, opacity 0.45s ease-out 0.2s;
+  }
   #overview-content { transition: opacity 0.18s ease-out; }
   #overview-content.refreshing { opacity: 0.55; }
   @keyframes flash-in { from { opacity: 0.2 } to { opacity: 1 } }
   #overview-content.flash { animation: flash-in 0.45s ease-out; }
-  .sub-detail { color: #8b8f95; margin-bottom: 14px; font-size: 12px;
-                font-variant-numeric: tabular-nums; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 18px 16px 40px; }
+    .brand { font-size: 30px; }
+    .hero.single .price { font-size: 48px; }
+    .card { padding: 18px 18px; }
+    .section-head h2 { font-size: 22px; }
+  }
 </style>
 </head>
 <body>
   <div class="progress-bar" id="progress-bar"></div>
-  <h1>pricemon · BTC overview</h1>
-  <div class="sub">
-    <span class="status-pill" id="live-status" data-state="loading">
-      <span class="live-dot"></span>
-      <span class="status-text">connecting…</span>
-    </span>
-    <button type="button" class="refresh-btn" id="refresh-now" title="Refresh now">refresh</button> ·
-    <a href="/history/">history</a> ·
-    <a href="/api/v1/docs/" title="Swagger UI">API docs</a> ·
-    <a href="/api/v1/current/">live JSON</a> ·
-    <a href="/api/v1/prices/?window={{ short_window }}">window JSON</a>
-  </div>
+  <div class="wrap">
 
-  <div class="chart-controls" id="chart-controls">
-    <span class="label">window</span>
-    <button type="button" class="pill" data-chart-window="60">1h</button>
-    <button type="button" class="pill" data-chart-window="120">2h</button>
-    <button type="button" class="pill" data-chart-window="360">6h</button>
-    <button type="button" class="pill" data-chart-window="720">12h</button>
-    <button type="button" class="pill" data-chart-window="1440">24h</button>
-  </div>
-
-  <div class="charts" id="charts">
-    {% for fiat in primary_quotes %}
-      <div class="chart-card">
-        <div class="chart-head">
-          <div class="chart-title">
-            BTC / {{ fiat }} · <span data-fiat-interval="{{ fiat }}">1-minute</span> candles
-          </div>
-          <div class="chart-status" data-fiat-status="{{ fiat }}">loading…</div>
-        </div>
-        <div class="chart-box" data-fiat-chart="{{ fiat }}"></div>
+    <header class="masthead">
+      <div>
+        <h1 class="brand">pricemon<span class="dot-mark"></span></h1>
+        <div class="tagline">btc · <em>market intelligence</em></div>
       </div>
-    {% endfor %}
-  </div>
+      <div class="toolbar">
+        <span class="status-pill" id="live-status" data-state="loading">
+          <span class="live-dot"></span>
+          <span class="status-text">connecting…</span>
+        </span>
+        <button type="button" class="refresh-btn" id="refresh-now" title="Refresh now">↻ refresh</button>
+        <button type="button" class="icon-btn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+          <span class="sun">☀</span><span class="moon">☾</span>
+        </button>
+      </div>
+    </header>
 
-  <div id="overview-content">
-    {% include "api/_overview_content.html" %}
-  </div>
+    <nav class="topnav">
+      <a href="/" class="active">Overview</a>
+      <span class="sep"></span>
+      <a href="/history/">History</a>
+      <span class="sep"></span>
+      <a href="/api/v1/docs/" title="Interactive Swagger UI">API Docs</a>
+      <span class="sep"></span>
+      <a href="/api/v1/health/" title="Service health JSON">Health</a>
+    </nav>
 
-  <div class="footer">
-    Endpoints: <a href="/api/v1/docs/">/api/v1/docs/</a> ·
-    <a href="/api/v1/prices/">/api/v1/prices/</a> ·
-    <a href="/api/v1/current/">/api/v1/current/</a> ·
-    <a href="/api/v1/candles/">/api/v1/candles/</a> ·
-    <a href="/api/v1/health/">/api/v1/health/</a> ·
-    <a href="/admin/">/admin/</a> ·
-    <a href="https://github.com/AbelLykens/pricemon" target="_blank" rel="noopener">GitHub</a>
+    {# Currency selector: primary quotes always visible; rest hidden behind "more". #}
+    <div class="selector" id="quote-selector" data-selected="{{ selected_quote|default:'' }}" data-all="{% if show_all %}1{% else %}0{% endif %}">
+      <span class="label">quote</span>
+      {% for q in available_quotes %}
+        {% if forloop.counter <= 2 %}
+          <button type="button" class="pill primary{% if not show_all and q == selected_quote %} active{% endif %}" data-quote="{{ q }}">{{ q }}</button>
+        {% endif %}
+      {% endfor %}
+      <span class="secondary-group" id="secondary-quotes">
+        {% for q in available_quotes %}
+          {% if forloop.counter > 2 %}
+            <button type="button" class="pill secondary{% if not show_all and q == selected_quote %} active{% endif %}" data-quote="{{ q }}">{{ q }}</button>
+          {% endif %}
+        {% endfor %}
+      </span>
+      {% if available_quotes|length > 2 %}
+        <button type="button" class="toggle-more" id="toggle-more">
+          {{ available_quotes|length|add:"-2" }} more →
+        </button>
+      {% endif %}
+      <span class="spacer"></span>
+      <button type="button" class="pill all{% if show_all %} active{% endif %}" data-quote="__all__">show all</button>
+    </div>
+
+    {# Chart band — one chart per primary fiat. Single-currency mode shows only the active one. #}
+    <div class="charts-band{% if show_all %} charts-all{% endif %}" id="charts">
+      {% for fiat in primary_quotes %}
+        <div class="chart-card{% if not show_all and fiat == selected_quote %} active{% endif %}" data-chart-fiat="{{ fiat }}">
+          <div class="chart-shell">
+            <div class="chart-head">
+              <div class="chart-title">
+                Candles<span class="pair">btc / {{ fiat|lower }}</span>
+              </div>
+              <div class="window-pills" data-chart-controls="{{ fiat }}">
+                <button type="button" class="pill" data-chart-window="60">1h</button>
+                <button type="button" class="pill" data-chart-window="120">2h</button>
+                <button type="button" class="pill" data-chart-window="360">6h</button>
+                <button type="button" class="pill" data-chart-window="720">12h</button>
+                <button type="button" class="pill" data-chart-window="1440">24h</button>
+              </div>
+            </div>
+            <div class="chart-box" data-fiat-chart="{{ fiat }}"></div>
+            <div class="chart-status" data-fiat-status="{{ fiat }}">loading…</div>
+          </div>
+        </div>
+      {% endfor %}
+      {% if not show_all and selected_quote and selected_quote not in primary_quotes %}
+        <div class="chart-shell" data-chart-placeholder>
+          <div class="chart-head">
+            <div class="chart-title">Candles<span class="pair">btc / {{ selected_quote|lower }}</span></div>
+          </div>
+          <div class="chart-empty">
+            candles only render for usd &amp; eur — switch quote or show all
+          </div>
+        </div>
+      {% endif %}
+    </div>
+
+    <div id="overview-content">
+      {% include "api/_overview_content.html" %}
+    </div>
+
+    <footer class="footer">
+      <div class="col">
+        <h4>About</h4>
+        <p>
+          BTC pricing aggregated minute-by-minute from active exchange websocket trade feeds.
+          USD &amp; EUR cards merge stablecoin volume after applying live peg rates.
+        </p>
+        <div class="colophon">
+          <span>{{ active_exchanges }}</span> exchanges
+          · <span>{{ total_aggregates }}</span> minute aggregates
+          · open source · <a href="https://github.com/AbelLykens/pricemon" target="_blank" rel="noopener">github ↗</a>
+        </div>
+      </div>
+      <div class="col">
+        <h4>Pages</h4>
+        <ul>
+          <li><a href="/">Live overview</a></li>
+          <li><a href="/history/">Daily history</a></li>
+          <li><a href="/admin/">Admin</a></li>
+        </ul>
+      </div>
+      <div class="col">
+        <h4>API · live</h4>
+        <ul>
+          <li><a href="/api/v1/current/">Current price <span class="endpoint">/current/</span></a></li>
+          <li><a href="/api/v1/prices/">Weighted VWAP <span class="endpoint">/prices/</span></a></li>
+          <li><a href="/api/v1/health/">Service health <span class="endpoint">/health/</span></a></li>
+          <li><a href="/price/summary.json">Summary JSON <span class="endpoint">/price/summary.json</span></a></li>
+        </ul>
+      </div>
+      <div class="col">
+        <h4>API · historical</h4>
+        <ul>
+          <li><a href="/api/v1/candles/">Minute candles <span class="endpoint">/candles/</span></a></li>
+          <li><a href="/api/v1/candles/agg/">Resampled candles <span class="endpoint">/candles/agg/</span></a></li>
+          <li><a href="/api/v1/docs/">OpenAPI docs <span class="endpoint">/docs/</span></a></li>
+        </ul>
+      </div>
+    </footer>
+
   </div>
 
   <script>
-  // Background AJAX refresh for the overview body (cards, rates, table).
-  // Charts are refreshed separately by the chart IIFE below.
+  // Theme handling — must run before any paint to avoid flash.
+  (function () {
+    const KEY = 'pricemon:theme';
+    let theme = 'dark';
+    try { theme = localStorage.getItem(KEY) || 'dark'; } catch (_) {}
+    document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+    document.addEventListener('DOMContentLoaded', () => {
+      const btn = document.getElementById('theme-toggle');
+      if (!btn) return;
+      btn.addEventListener('click', () => {
+        const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem(KEY, next); } catch (_) {}
+        window.dispatchEvent(new CustomEvent('pricemon:theme', { detail: { theme: next } }));
+      });
+    });
+  })();
+  </script>
+
+  <script>
+  // Currency selector + AJAX refresh. The fragment endpoint accepts ?quote=… or ?all=1
+  // and the chart container visibility tracks the same selection.
   (function () {
     const REFRESH_MS = 10000;
-    const ENDPOINT = '{% url "overview" %}?fragment=1';
+    const QUOTE_KEY = 'pricemon:quote';
+    const ALL_KEY = 'pricemon:all';
+    const FRAGMENT_URL = '{% url "overview" %}?fragment=1';
     const content = document.getElementById('overview-content');
     const pill = document.getElementById('live-status');
     const pillText = pill.querySelector('.status-text');
     const refreshBtn = document.getElementById('refresh-now');
     const progress = document.getElementById('progress-bar');
-    if (!content || !pill) return;
+    const selector = document.getElementById('quote-selector');
+    const charts = document.getElementById('charts');
+    const toggleMore = document.getElementById('toggle-more');
+
+    if (!content || !pill || !selector) return;
+
+    let state = {
+      quote: selector.dataset.selected || null,
+      all: selector.dataset.all === '1',
+    };
+
+    // Re-hydrate from localStorage on first paint so the user's choice survives.
+    try {
+      const persistedAll = localStorage.getItem(ALL_KEY) === '1';
+      const persistedQuote = localStorage.getItem(QUOTE_KEY) || null;
+      if (persistedAll !== state.all || (persistedQuote && persistedQuote !== state.quote)) {
+        state.all = persistedAll;
+        state.quote = persistedQuote;
+        applyChartVisibility();
+        refresh(true);
+      }
+    } catch (_) {}
+
+    if (toggleMore) {
+      toggleMore.addEventListener('click', () => {
+        selector.classList.toggle('expanded');
+        toggleMore.textContent = selector.classList.contains('expanded')
+          ? 'fewer ←'
+          : toggleMore.textContent.replace('fewer ←', 'more →');
+      });
+      // If a secondary quote is already active on first render, auto-expand.
+      const activeSecondary = selector.querySelector('.pill.secondary.active');
+      if (activeSecondary) {
+        selector.classList.add('expanded');
+        toggleMore.textContent = 'fewer ←';
+      }
+    }
+
+    selector.addEventListener('click', (e) => {
+      const btn = e.target.closest('.pill[data-quote]');
+      if (!btn) return;
+      const q = btn.dataset.quote;
+      if (q === '__all__') {
+        state.all = true;
+        state.quote = null;
+      } else {
+        state.all = false;
+        state.quote = q;
+      }
+      persist();
+      syncSelectorUI();
+      applyChartVisibility();
+      refresh(true);
+    });
+
+    function persist() {
+      try {
+        localStorage.setItem(ALL_KEY, state.all ? '1' : '0');
+        if (state.quote) localStorage.setItem(QUOTE_KEY, state.quote);
+        else localStorage.removeItem(QUOTE_KEY);
+      } catch (_) {}
+    }
+
+    function syncSelectorUI() {
+      const pills = selector.querySelectorAll('.pill');
+      for (const p of pills) {
+        const q = p.dataset.quote;
+        if (q === '__all__') {
+          p.classList.toggle('active', state.all);
+        } else {
+          p.classList.toggle('active', !state.all && q === state.quote);
+        }
+      }
+    }
+
+    function applyChartVisibility() {
+      if (!charts) return;
+      charts.classList.toggle('charts-all', state.all);
+      const cards = charts.querySelectorAll('.chart-card[data-chart-fiat]');
+      let anyActive = false;
+      for (const c of cards) {
+        const f = c.dataset.chartFiat;
+        if (state.all) {
+          c.classList.add('active');
+          anyActive = true;
+        } else if (f === state.quote) {
+          c.classList.add('active');
+          anyActive = true;
+        } else {
+          c.classList.remove('active');
+        }
+      }
+      const placeholder = charts.querySelector('[data-chart-placeholder]');
+      if (placeholder) {
+        placeholder.style.display = (!state.all && !anyActive) ? '' : 'none';
+      }
+    }
+
+    function buildFragmentURL() {
+      const u = new URL(FRAGMENT_URL, window.location.origin);
+      if (state.all) {
+        u.searchParams.set('all', '1');
+      } else if (state.quote) {
+        u.searchParams.set('quote', state.quote);
+      }
+      return u.toString();
+    }
 
     let lastSuccess = Date.now();
     let inFlight = null;
     let timer = null;
 
-    function setState(state, text) {
-      pill.dataset.state = state;
+    function setStateLabel(s, text) {
+      pill.dataset.state = s;
       if (text !== undefined) pillText.textContent = text;
     }
-
     function fmtAge(ms) {
       const s = Math.max(0, Math.round(ms / 1000));
-      if (s < 60) return `live · updated ${s}s ago`;
+      if (s < 60) return `live · ${s}s ago`;
       const m = Math.floor(s / 60);
-      return `live · updated ${m}m${(s % 60).toString().padStart(2,'0')}s ago`;
+      return `live · ${m}m${(s % 60).toString().padStart(2,'0')}s ago`;
     }
-
     function startProgress() {
       progress.classList.remove('done');
-      // Force a reflow so the next class change re-triggers the transition.
       void progress.offsetWidth;
       progress.classList.add('loading');
     }
@@ -220,14 +880,13 @@
     async function refresh(manual) {
       if (inFlight) return;
       if (!manual && document.hidden) return;
-      setState('loading', 'updating…');
+      setStateLabel('loading', 'updating…');
       startProgress();
       refreshBtn.disabled = true;
       const ctl = new AbortController();
       const timeoutId = setTimeout(() => ctl.abort(), 9000);
-      inFlight = fetch(ENDPOINT, {
-        cache: 'no-store',
-        signal: ctl.signal,
+      inFlight = fetch(buildFragmentURL(), {
+        cache: 'no-store', signal: ctl.signal,
         headers: { 'X-Requested-With': 'fetch' },
       })
         .then(res => {
@@ -244,11 +903,9 @@
             content.classList.add('flash');
           });
           lastSuccess = Date.now();
-          setState('ok', fmtAge(0));
+          setStateLabel('ok', fmtAge(0));
         })
-        .catch(err => {
-          setState('error', `error · ${err.message || err}`);
-        })
+        .catch(err => setStateLabel('error', `error · ${err.message || err}`))
         .finally(() => {
           clearTimeout(timeoutId);
           endProgress();
@@ -258,13 +915,9 @@
     }
 
     function tickAgeLabel() {
-      if (pill.dataset.state === 'ok') {
-        setState('ok', fmtAge(Date.now() - lastSuccess));
-      } else if (pill.dataset.state === 'paused') {
-        setState('paused', 'paused · tab hidden');
-      }
+      if (pill.dataset.state === 'ok') setStateLabel('ok', fmtAge(Date.now() - lastSuccess));
+      else if (pill.dataset.state === 'paused') setStateLabel('paused', 'paused · hidden tab');
     }
-
     function schedule() {
       if (timer) clearInterval(timer);
       timer = setInterval(() => refresh(false), REFRESH_MS);
@@ -272,10 +925,10 @@
 
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
-        if (pill.dataset.state === 'ok') setState('paused', 'paused · tab hidden');
+        if (pill.dataset.state === 'ok') setStateLabel('paused', 'paused · hidden tab');
         if (timer) { clearInterval(timer); timer = null; }
       } else {
-        setState('ok', fmtAge(Date.now() - lastSuccess));
+        setStateLabel('ok', fmtAge(Date.now() - lastSuccess));
         refresh(false);
         schedule();
       }
@@ -283,106 +936,92 @@
     refreshBtn.addEventListener('click', () => refresh(true));
     setInterval(tickAgeLabel, 1000);
 
-    // The page was just server-rendered, so treat that as a successful "fetch".
-    setState('ok', fmtAge(0));
+    setStateLabel('ok', fmtAge(0));
     schedule();
+    syncSelectorUI();
+    applyChartVisibility();
+
+    // Expose for the chart module.
+    window.__pricemon = { getState: () => state };
   })();
   </script>
 
   <script src="{% static 'api/vendor/lightweight-charts.standalone.production.js' %}"></script>
   <script>
+  // Candle chart — pulls /api/candles/agg/ for the active fiats only and re-themes on toggle.
   (function () {
     const DEFAULT_WINDOW_MIN = 360;
     const STORAGE_KEY = 'pricemon:chartWindowMin';
     const REFRESH_MS = 15000;
-    // Bucket size per window, chosen to keep ~60–360 candles on screen.
-    const INTERVAL_FOR_WINDOW = {
-      60: 1,
-      120: 1,
-      360: 1,
-      720: 5,
-      1440: 5,
-    };
-    const fiats = Array.from(
-      document.querySelectorAll('[data-fiat-chart]')
-    ).map(el => el.dataset.fiatChart);
+    const INTERVAL_FOR_WINDOW = { 60: 1, 120: 1, 360: 1, 720: 5, 1440: 5 };
+    const fiats = Array.from(document.querySelectorAll('[data-fiat-chart]'))
+      .map(el => el.dataset.fiatChart);
     if (!fiats.length || typeof LightweightCharts === 'undefined') return;
 
-    const controls = document.getElementById('chart-controls');
-    const pills = controls
-      ? Array.from(controls.querySelectorAll('[data-chart-window]'))
-      : [];
-    const allowed = new Set(pills.map(p => Number(p.dataset.chartWindow)));
     let windowMin = DEFAULT_WINDOW_MIN;
     try {
       const stored = Number(localStorage.getItem(STORAGE_KEY));
+      const allowed = new Set([60, 120, 360, 720, 1440]);
       if (allowed.has(stored)) windowMin = stored;
-    } catch (_) { /* localStorage unavailable */ }
+    } catch (_) {}
 
-    function intervalFor(w) {
-      return INTERVAL_FOR_WINDOW[w] || 1;
-    }
-    function fmtInterval(m) {
-      return m < 60 ? `${m}m` : `${m / 60}h`;
-    }
-    function fmtIntervalLong(m) {
-      if (m < 60) return `${m}-minute`;
-      const h = m / 60;
-      return h === 1 ? '1-hour' : `${h}-hour`;
-    }
-    function setIntervalLabels(m) {
-      const label = fmtIntervalLong(m);
-      for (const el of document.querySelectorAll('[data-fiat-interval]')) {
-        el.textContent = label;
-      }
+    function intervalFor(w) { return INTERVAL_FOR_WINDOW[w] || 1; }
+    function fmtInterval(m) { return m < 60 ? `${m}m` : `${m / 60}h`; }
+
+    function chartThemeOpts() {
+      const styles = getComputedStyle(document.documentElement);
+      return {
+        layout: {
+          background: { type: 'solid', color: styles.getPropertyValue('--chart-bg').trim() || '#15171b' },
+          textColor: styles.getPropertyValue('--text-muted').trim() || '#8b8f95',
+          fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+          fontSize: 11,
+          attributionLogo: false,
+        },
+        grid: {
+          vertLines: { color: styles.getPropertyValue('--chart-grid').trim() || '#23262b' },
+          horzLines: { color: styles.getPropertyValue('--chart-grid').trim() || '#23262b' },
+        },
+        rightPriceScale: { borderColor: styles.getPropertyValue('--border').trim() || '#25282d' },
+        timeScale: {
+          borderColor: styles.getPropertyValue('--border').trim() || '#25282d',
+          timeVisible: true, secondsVisible: false,
+        },
+        crosshair: { mode: 1 },
+        autoSize: true,
+      };
     }
 
-    function setActivePill() {
-      for (const p of pills) {
-        p.classList.toggle('active', Number(p.dataset.chartWindow) === windowMin);
-      }
+    function seriesColors() {
+      const styles = getComputedStyle(document.documentElement);
+      const up = styles.getPropertyValue('--ok').trim() || '#3aa75e';
+      const down = styles.getPropertyValue('--bad').trim() || '#c44e4e';
+      return {
+        upColor: up, downColor: down,
+        borderUpColor: up, borderDownColor: down,
+        wickUpColor: up, wickDownColor: down,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      };
     }
-    setActivePill();
-
-    const baseChartOpts = {
-      layout: {
-        background: { type: 'solid', color: '#1a1c20' },
-        textColor: '#8b8f95',
-        fontSize: 11,
-        attributionLogo: false,
-      },
-      grid: {
-        vertLines: { color: '#23262b' },
-        horzLines: { color: '#23262b' },
-      },
-      rightPriceScale: { borderColor: '#25282d' },
-      timeScale: {
-        borderColor: '#25282d',
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      crosshair: { mode: 1 },
-      autoSize: true,
-    };
-
-    const seriesOpts = {
-      upColor: '#3aa75e',
-      downColor: '#c44e4e',
-      borderUpColor: '#3aa75e',
-      borderDownColor: '#c44e4e',
-      wickUpColor: '#3aa75e',
-      wickDownColor: '#c44e4e',
-      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-    };
 
     const charts = {};
     for (const fiat of fiats) {
       const container = document.querySelector(`[data-fiat-chart="${fiat}"]`);
       if (!container) continue;
-      const chart = LightweightCharts.createChart(container, baseChartOpts);
-      const series = chart.addSeries(LightweightCharts.CandlestickSeries, seriesOpts);
+      const chart = LightweightCharts.createChart(container, chartThemeOpts());
+      const series = chart.addSeries(LightweightCharts.CandlestickSeries, seriesColors());
       charts[fiat] = { chart, series, container };
     }
+
+    function reTheme() {
+      const opts = chartThemeOpts();
+      const ser = seriesColors();
+      for (const f of Object.keys(charts)) {
+        charts[f].chart.applyOptions(opts);
+        charts[f].series.applyOptions(ser);
+      }
+    }
+    window.addEventListener('pricemon:theme', reTheme);
 
     function setStatus(fiat, text, isBad) {
       const el = document.querySelector(`[data-fiat-status="${fiat}"]`);
@@ -390,22 +1029,36 @@
       el.textContent = text;
       el.classList.toggle('bad', !!isBad);
     }
+    function setActiveWindowPill() {
+      const all = document.querySelectorAll('[data-chart-controls] .pill');
+      for (const p of all) {
+        p.classList.toggle('active', Number(p.dataset.chartWindow) === windowMin);
+      }
+    }
+    setActiveWindowPill();
+
+    function activeFiats() {
+      const state = window.__pricemon ? window.__pricemon.getState() : { all: true, quote: null };
+      if (state.all) return fiats.slice();
+      if (state.quote && fiats.includes(state.quote)) return [state.quote];
+      return [];
+    }
 
     async function refresh() {
+      const targets = activeFiats();
+      if (!targets.length) return;
       const interval = intervalFor(windowMin);
-      setIntervalLabels(interval);
       const params = new URLSearchParams();
       params.set('window', String(windowMin));
       params.set('interval', String(interval));
-      for (const f of fiats) params.append('fiat', f);
+      for (const f of targets) params.append('fiat', f);
       try {
         const res = await fetch(`/api/candles/agg/?${params}`, { cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const intResp = data.interval_minutes || interval;
-        setIntervalLabels(intResp);
         const intLabel = fmtInterval(intResp);
-        for (const fiat of fiats) {
+        for (const fiat of targets) {
           const entry = charts[fiat];
           const bars = (data.series && data.series[fiat]) || [];
           if (!entry) continue;
@@ -415,33 +1068,38 @@
           } else {
             const last = bars[bars.length - 1];
             const ts = new Date(last.time * 1000).toISOString().slice(11, 16);
-            setStatus(fiat, `${bars.length} × ${intLabel} bars · last ${ts} UTC · ${last.close.toFixed(2)} ${fiat}`, false);
+            setStatus(fiat, `${bars.length} bars · ${intLabel} · last ${ts} utc · ${last.close.toFixed(2)} ${fiat}`, false);
           }
         }
       } catch (err) {
-        for (const fiat of fiats) setStatus(fiat, `error: ${err.message}`, true);
+        for (const fiat of targets) setStatus(fiat, `error: ${err.message}`, true);
       }
     }
+
+    document.addEventListener('click', (e) => {
+      const p = e.target.closest('[data-chart-controls] .pill[data-chart-window]');
+      if (!p) return;
+      const next = Number(p.dataset.chartWindow);
+      if (next === windowMin) return;
+      windowMin = next;
+      try { localStorage.setItem(STORAGE_KEY, String(windowMin)); } catch (_) {}
+      setActiveWindowPill();
+      for (const f of activeFiats()) setStatus(f, 'loading…', false);
+      refresh();
+    });
+
+    // When selection changes, refresh the active chart.
+    let lastState = JSON.stringify(window.__pricemon ? window.__pricemon.getState() : {});
+    setInterval(() => {
+      const cur = JSON.stringify(window.__pricemon ? window.__pricemon.getState() : {});
+      if (cur !== lastState) { lastState = cur; refresh(); }
+    }, 500);
 
     let timer = null;
     function schedule() {
       if (timer) clearInterval(timer);
       timer = setInterval(refresh, REFRESH_MS);
     }
-
-    for (const p of pills) {
-      p.addEventListener('click', () => {
-        const next = Number(p.dataset.chartWindow);
-        if (!allowed.has(next) || next === windowMin) return;
-        windowMin = next;
-        setActivePill();
-        try { localStorage.setItem(STORAGE_KEY, String(windowMin)); } catch (_) {}
-        for (const fiat of fiats) setStatus(fiat, 'loading…', false);
-        refresh();
-        schedule();
-      });
-    }
-
     refresh();
     schedule();
   })();

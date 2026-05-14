@@ -3,31 +3,35 @@
      data-as-of="{{ now|date:'c' }}"
      data-active-exchanges="{{ active_exchanges }}"
      data-total-aggregates="{{ total_aggregates }}">
-  {{ active_exchanges }} active exchange{{ active_exchanges|pluralize }} ·
-  {{ total_aggregates }} minute aggregates ·
-  server time {{ now|date:"H:i:s" }} UTC
+  {{ active_exchanges }} active exchange{{ active_exchanges|pluralize }}
+  <span class="dim">·</span>
+  {{ total_aggregates }} minute aggregates
+  <span class="dim">·</span>
+  server time {{ now|date:"H:i:s" }} utc
 </div>
 
 {% if stable_rates_live %}
   <div class="rates">
-    live stable rates ·
+    <span class="heading">stable rates</span>
     {% for stable, info in stable_rates_live.items %}
-      <span><b>{{ stable }}/{{ info.fiat }}</b> {{ info.rate|floatformat:4 }} <span style="color:#5d6168">({{ info.exchanges }} ex)</span></span>
+      <span><b>{{ stable }}/{{ info.fiat }}</b> {{ info.rate|floatformat:4 }} <span class="ex-count">({{ info.exchanges }} ex)</span></span>
     {% endfor %}
   </div>
 {% endif %}
 
-<div class="hero">
+{# ── Hero band: live + window VWAP ─────────────────────────── #}
+<div class="hero{% if not show_all and selected_quote %} single{% endif %}">
   {% for fiat, slot in live_fiat.items %}
     <div class="card fiat-merged">
       <div class="label">
-        <span><span class="live-dot"></span>BTC / {{ fiat }} · now
-        {% if slot.components|length > 1 %}<span class="merge-tag">merged</span>{% endif %}
+        <span class="label-left">
+          <span class="live-dot"></span>btc / {{ fiat }} · live
+          {% if slot.components|length > 1 %}<span class="merge-tag">merged</span>{% endif %}
         </span>
-        <a class="json-link" href="/api/v1/current/?base=BTC&amp;quote={{ fiat }}">json</a>
+        <a class="json-link" href="/api/v1/current/?base=BTC&amp;quote={{ fiat }}">json ↗</a>
       </div>
       {% if slot.price %}
-        <div class="price live">{{ slot.price|floatformat:2 }} {{ fiat }}</div>
+        <div class="price live">{{ slot.price|floatformat:2 }}<span class="ccy">{{ fiat }}</span></div>
         <div class="components">
           {% for c in slot.components %}
             <span>{{ c.source_quote }}{% if c.source_quote != fiat %} × {{ c.rate|floatformat:4 }}{% endif %}</span>
@@ -44,14 +48,15 @@
     {% if quote not in live_fiat %}
       <div class="card">
         <div class="label">
-          <span><span class="live-dot"></span>BTC / {{ quote }} · now</span>
-          <a class="json-link" href="/api/v1/current/?base=BTC&amp;quote={{ quote }}">json</a>
+          <span class="label-left">
+            <span class="live-dot"></span>btc / {{ quote }} · live
+          </span>
+          <a class="json-link" href="/api/v1/current/?base=BTC&amp;quote={{ quote }}">json ↗</a>
         </div>
         {% if slot.price %}
-          <div class="price live">{{ slot.price|floatformat:2 }} {{ quote }}</div>
+          <div class="price live">{{ slot.price|floatformat:2 }}<span class="ccy">{{ quote }}</span></div>
           <div class="meta">
-            {{ slot.exchanges }} exchange{{ slot.exchanges|pluralize }} live ·
-            fresh window {{ fresh_window_sec }} s
+            {{ slot.exchanges }} exchange{{ slot.exchanges|pluralize }} · fresh window {{ fresh_window_sec }} s
           </div>
         {% else %}
           <div class="price stale">—</div>
@@ -64,23 +69,22 @@
   {% for fiat, info in global_vwap_fiat.items %}
     <div class="card fiat-merged">
       <div class="label">
-        <span>BTC / {{ fiat }} VWAP · last {{ short_window }} min
-        {% if info.components|length > 1 %}<span class="merge-tag">merged</span>{% endif %}
+        <span class="label-left">
+          btc / {{ fiat }} · {{ short_window }}m vwap
+          {% if info.components|length > 1 %}<span class="merge-tag">merged</span>{% endif %}
         </span>
-        <a class="json-link" href="/api/v1/prices/?base=BTC&amp;quote={{ fiat }}&amp;window={{ short_window }}">json</a>
+        <a class="json-link" href="/api/v1/prices/?base=BTC&amp;quote={{ fiat }}&amp;window={{ short_window }}">json ↗</a>
       </div>
       {% if info.vwap %}
-        <div class="price">{{ info.vwap|floatformat:2 }} {{ fiat }}</div>
-        <div class="meta">
-          {{ info.trades }} trades · {{ info.volume_base|floatformat:6 }} BTC traded
-        </div>
+        <div class="price">{{ info.vwap|floatformat:2 }}<span class="ccy">{{ fiat }}</span></div>
+        <div class="meta">{{ info.trades }} trades · {{ info.volume_base|floatformat:6 }} btc</div>
         <div class="components">
           {% for c in info.components %}
             <span>{{ c.source_quote }} {{ c.volume_base|floatformat:3 }}{% if c.source_quote != fiat %} × {{ c.rate|floatformat:4 }}{% endif %}</span>
           {% endfor %}
         </div>
       {% else %}
-        <div class="price" style="color:#5d6168">—</div>
+        <div class="price stale">—</div>
         <div class="meta">no trades in window</div>
       {% endif %}
     </div>
@@ -90,16 +94,14 @@
     {% if quote not in global_vwap_fiat %}
       <div class="card">
         <div class="label">
-          <span>BTC / {{ quote }} VWAP · last {{ short_window }} min</span>
-          <a class="json-link" href="/api/v1/prices/?base=BTC&amp;quote={{ quote }}&amp;window={{ short_window }}">json</a>
+          <span class="label-left">btc / {{ quote }} · {{ short_window }}m vwap</span>
+          <a class="json-link" href="/api/v1/prices/?base=BTC&amp;quote={{ quote }}&amp;window={{ short_window }}">json ↗</a>
         </div>
         {% if info.vwap %}
-          <div class="price">{{ info.vwap|floatformat:2 }} {{ quote }}</div>
-          <div class="meta">
-            {{ info.trades }} trades · {{ info.volume_base|floatformat:6 }} BTC traded
-          </div>
+          <div class="price">{{ info.vwap|floatformat:2 }}<span class="ccy">{{ quote }}</span></div>
+          <div class="meta">{{ info.trades }} trades · {{ info.volume_base|floatformat:6 }} btc</div>
         {% else %}
-          <div class="price" style="color:#5d6168">—</div>
+          <div class="price stale">—</div>
           <div class="meta">no trades in window</div>
         {% endif %}
       </div>
@@ -107,69 +109,43 @@
   {% endfor %}
 
   {% if not live_current and not global_vwap and not live_fiat and not global_vwap_fiat %}
-    <div class="card">
-      <div class="label">No data yet</div>
-      <div class="meta">Waiting for daemons to flush their first minute…</div>
-    </div>
+    <div class="empty">waiting for daemons to flush their first minute…</div>
   {% endif %}
 </div>
 
-<div class="legend">
-  feed freshness:
-  <span><span class="dot ok"></span> recent (≤ 3 min)</span>
-  <span><span class="dot warn"></span> aging (3–10 min)</span>
-  <span><span class="dot bad"></span> stale (&gt; 10 min)</span>
-</div>
+{# ── Exchanges grid ────────────────────────────────────────── #}
+{% if rows %}
+  <div class="section-head">
+    <h2>Exchanges<em> · across {{ rows|length }} feed{{ rows|length|pluralize }}</em></h2>
+    <span class="section-sub">
+      {% if show_all %}all quotes
+      {% elif selected_quote %}btc / {{ selected_quote }}
+      {% endif %}
+    </span>
+  </div>
 
-<table>
-  <thead>
-    <tr>
-      <th>exchange</th>
-      <th>pair</th>
-      <th>now</th>
-      <th>last minute (UTC)</th>
-      <th>VWAP</th>
-      <th>min</th>
-      <th>max</th>
-      <th>trades / min</th>
-      <th>trades / hr</th>
-      <th>volume / hr (BTC)</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in rows %}
-      <tr>
-        <td>
-          {% if r.fresh %}<span class="dot ok"  title="recent (≤ 3 min)"></span>
-          {% elif r.stale %}<span class="dot bad" title="stale (no minute in 10 min)"></span>
-          {% else %}<span class="dot warn" title="aging"></span>{% endif %}
-          {{ r.exchange }}
-        </td>
-        <td>{{ r.symbol }}</td>
-        {% if r.current_price %}
-          <td class="num" style="color:{% if r.current_fresh %}#e8e8e8{% else %}#d39e3a{% endif %}">
-            {{ r.current_price|floatformat:2 }}
-            {% if not r.current_fresh %}<span class="muted">({{ r.current_age_sec|floatformat:0 }}s)</span>{% endif %}
-          </td>
-        {% else %}
-          <td class="muted">—</td>
-        {% endif %}
-        {% if r.latest_minute %}
-          <td class="num">{{ r.latest_minute|date:"H:i" }} <span class="muted">({{ r.age_sec|floatformat:0 }} s ago)</span></td>
-          <td class="num">{{ r.vwap|floatformat:2 }}</td>
-          <td class="num">{{ r.min|floatformat:2 }}</td>
-          <td class="num">{{ r.max|floatformat:2 }}</td>
-          <td class="num">{{ r.trades_minute }}</td>
-        {% else %}
-          <td class="muted">—</td>
-          <td class="muted">—</td>
-          <td class="muted">—</td>
-          <td class="muted">—</td>
-          <td class="muted">—</td>
-        {% endif %}
-        <td class="num">{{ r.trades_hour|default:0 }}</td>
-        <td class="num">{{ r.volume_hour|floatformat:6|default:"0.000000" }}</td>
-      </tr>
+  {% if show_all %}
+    {% regroup rows by quote as rows_by_quote %}
+    {% for group in rows_by_quote %}
+      <div class="ex-group">
+        <div class="group-label">btc / {{ group.grouper }} · {{ group.list|length }} feed{{ group.list|length|pluralize }}</div>
+        <div class="ex-grid">
+          {% for r in group.list %}
+            {% include "api/_exchange_card.html" with r=r %}
+          {% endfor %}
+        </div>
+      </div>
     {% endfor %}
-  </tbody>
-</table>
+  {% else %}
+    <div class="ex-grid">
+      {% for r in rows %}
+        {% include "api/_exchange_card.html" with r=r %}
+      {% endfor %}
+    </div>
+  {% endif %}
+{% else %}
+  <div class="section-head">
+    <h2>Exchanges<em> · none for this quote</em></h2>
+  </div>
+  <div class="empty">no active feeds for the selected quote — pick another or hit “show all”</div>
+{% endif %}

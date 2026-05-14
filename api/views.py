@@ -1644,6 +1644,37 @@ class OverviewView(View):
         live_current = self._order_by_priority(live_current)
         global_vwap_fiat = self._order_by_priority(global_vwap_fiat)
         live_fiat = self._order_by_priority(live_fiat)
+
+        all_quotes_seen = set(live_fiat) | set(live_current) | set(global_vwap_fiat) | set(global_vwap)
+        for r in rows:
+            all_quotes_seen.add(r["quote"])
+        available_quotes = [q for q in self.PRIMARY_QUOTES if q in all_quotes_seen]
+        for q in sorted(all_quotes_seen):
+            if q not in available_quotes:
+                available_quotes.append(q)
+
+        show_all = request.GET.get("all") == "1"
+        raw_q = (request.GET.get("quote") or "").upper().strip()
+        if raw_q and raw_q in all_quotes_seen:
+            selected_quote = raw_q
+        elif show_all:
+            selected_quote = None
+        else:
+            selected_quote = available_quotes[0] if available_quotes else None
+
+        if selected_quote is not None and not show_all:
+            if selected_quote in self.FIATS:
+                row_quotes = {selected_quote} | {
+                    s for s, f in peg_map.items() if f == selected_quote
+                }
+            else:
+                row_quotes = {selected_quote}
+            rows = [r for r in rows if r["quote"] in row_quotes]
+            live_fiat = {k: v for k, v in live_fiat.items() if k == selected_quote}
+            live_current = {k: v for k, v in live_current.items() if k == selected_quote}
+            global_vwap_fiat = {k: v for k, v in global_vwap_fiat.items() if k == selected_quote}
+            global_vwap = {k: v for k, v in global_vwap.items() if k == selected_quote}
+
         ctx = {
             "now": now,
             "short_window": self.SHORT_WINDOW_MIN,
@@ -1655,6 +1686,9 @@ class OverviewView(View):
             "stable_rates_live": stable_rates_live,
             "stable_rates_window": stable_rates_window,
             "primary_quotes": list(self.PRIMARY_QUOTES),
+            "available_quotes": available_quotes,
+            "selected_quote": selected_quote,
+            "show_all": show_all,
             "fresh_window_sec": settings.CURRENT_FRESH_SEC,
             "rows": rows,
             "active_exchanges": Exchange.objects.filter(is_active=True).count(),

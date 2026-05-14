@@ -1,0 +1,44 @@
+{# Single exchange row card — used inside _overview_content.html. #}
+<div class="ex-card">
+  <div class="ex-head">
+    <div>
+      <div class="ex-name">{{ r.exchange }}</div>
+      <div class="ex-symbol">{{ r.symbol }}</div>
+    </div>
+    {% if r.fresh %}
+      <span class="freshness ok"><span class="dot"></span>fresh</span>
+    {% elif r.stale %}
+      <span class="freshness bad"><span class="dot"></span>stale</span>
+    {% else %}
+      <span class="freshness warn"><span class="dot"></span>aging</span>
+    {% endif %}
+  </div>
+
+  {% if r.current_price %}
+    <div class="price-line{% if not r.current_fresh %} stale{% endif %}">
+      {{ r.current_price|floatformat:2 }}
+      {% if not r.current_fresh %}<span class="age">{{ r.current_age_sec|floatformat:0 }}s old</span>{% endif %}
+    </div>
+  {% elif r.vwap %}
+    <div class="price-line">
+      {{ r.vwap|floatformat:2 }}<span class="age">{{ r.latest_minute|date:"H:i" }} utc</span>
+    </div>
+  {% else %}
+    <div class="price-line muted">—</div>
+  {% endif %}
+
+  <div class="stats">
+    <div class="stat">
+      <div class="v">{{ r.trades_minute|default:0 }}</div>
+      <div class="k">trd · min</div>
+    </div>
+    <div class="stat">
+      <div class="v">{{ r.trades_hour|default:0 }}</div>
+      <div class="k">trd · hr</div>
+    </div>
+    <div class="stat">
+      <div class="v">{{ r.volume_hour|floatformat:4|default:"0.0000" }}</div>
+      <div class="k">btc · hr</div>
+    </div>
+  </div>
+</div>
